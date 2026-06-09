@@ -438,8 +438,7 @@ for SUBJECT_ID in "${SUBJECTS[@]}"; do
         [ -f "$TCK_MNI" ] || { warn "Tractogramme introuvable : ${TCK_MNI}"; continue; }
 
         if ! skip_if_exists "$TCK_OUT_MNI" "bundle ${BUNDLE} (espace MNI)"; then
-            # Re-écrit l'en-tête sur la grille FA_MNI pour éviter les ambiguïtés d'espace.
-            tckedit "$TCK_MNI" "$TCK_OUT_MNI" -template "$FA_MNI" -force -quiet
+            tckedit "$TCK_MNI" "$TCK_OUT_MNI" -force -quiet
         fi
 
         assert_tck_space_matches_image "$TCK_OUT_MNI" "$FA_MNI" "${SUBJECT_ID}/${BUNDLE}" \
@@ -527,7 +526,7 @@ PYEOF
         [ -f "$TCK_MNI" ] || { warn "Tractogramme MNI introuvable pour ${BUNDLE}"; continue; }
 
         if ! skip_if_exists "$TCK_CEREB" "filtrage cérébelleux ${BUNDLE}"; then
-            tckedit "$TCK_MNI" "$TCK_CEREB" -include "$CEREB_MASK_MNI" -template "$FA_MNI" -force -quiet
+            tckedit "$TCK_MNI" "$TCK_CEREB" -include "$CEREB_MASK_MNI" -force -quiet
             assert_tck_space_matches_image "$TCK_CEREB" "$FA_MNI" "${SUBJECT_ID}/${BUNDLE}/cerebellar" \
                 || die "${SUBJECT_ID} : incohérence espace MNI après filtrage ${BUNDLE}"
             N=$(tckinfo "$TCK_CEREB" 2>/dev/null | awk -F': *' '/count:/ {print $2; exit}' || echo "?")
@@ -550,7 +549,7 @@ PYEOF
             [ -f "$TCK_CEREB" ] && CEREB_TCKS+=("$TCK_CEREB")
         done
         if [ "${#CEREB_TCKS[@]}" -gt 0 ]; then
-            tckedit "${CEREB_TCKS[@]}" "$TCK_ALL_CEREB" -template "$FA_MNI" -force -quiet
+            tckedit "${CEREB_TCKS[@]}" "$TCK_ALL_CEREB" -force -quiet
             N_ALL=$(tckinfo "$TCK_ALL_CEREB" 2>/dev/null | awk -F': *' '/count:/ {print $2; exit}' || echo "?")
             info "Fusion cérébelleux (MNI) : ${N_ALL} streamlines → ${TCK_ALL_CEREB}"
         else
@@ -652,7 +651,7 @@ PYEOF
         TCK_MNI_OUT="${OUT_BUNDLES}/${SUBJECT_ID}_bundle-${BUNDLE}_space-MNI.tck"
         [ -f "$TCK_MNI" ] || { warn "Tractogramme QC introuvable : ${TCK_MNI}"; continue; }
         if ! skip_if_exists "$TCK_MNI_OUT" "bundle QC ${BUNDLE} (espace MNI)"; then
-            tckedit "$TCK_MNI" "$TCK_MNI_OUT" -template "$FA_MNI" -force -quiet
+            tckedit "$TCK_MNI" "$TCK_MNI_OUT" -force -quiet
             assert_tck_space_matches_image "$TCK_MNI_OUT" "$FA_MNI" "${SUBJECT_ID}/${BUNDLE}/QC" \
                 || die "${SUBJECT_ID}/${BUNDLE} : incohérence espace MNI (QC)"
             info "${BUNDLE} (MNI QC) : $(tckinfo "$TCK_MNI_OUT" | awk -F': *' '/count:/ {print $2; exit}') streamlines"
@@ -692,8 +691,7 @@ PYEOF
 
         if ! skip_if_exists "$TDI_DEPC_ALL" "TDI cérébelleux complet DeepCeres"; then
             if [ -f "$TCK_ALL_CEREB" ] && [ -f "$CEREB_MASK_MNI" ]; then
-                tckedit "$TCK_ALL_CEREB" "$TCK_DEPC_ALL" \
-                    -include "$CEREB_MASK_MNI" -template "$FA_MNI" -force -quiet
+                tckedit "$TCK_ALL_CEREB" "$TCK_DEPC_ALL" -include "$CEREB_MASK_MNI" -force -quiet
                 tckmap "$TCK_DEPC_ALL" "$TDI_DEPC_ALL" \
                     -template "$FA_MNI" -force -quiet
                 N_DEPC=$(tckinfo "$TCK_DEPC_ALL" 2>/dev/null | grep ' count' | awk '{print $NF}' || echo "?")
@@ -734,7 +732,7 @@ print(int(nib.load('${LOB_MASK}').get_fdata().sum()))" 2>/dev/null || echo 0)
                 TCK_OUT="${OUT_LOBULES}/${SUBJECT_ID}_bundle-${BUNDLE}_desc-deepceres-${LOB_NAME}.tck"
                 [ -f "$TCK_IN" ] || continue
                 if ! skip_if_exists "$TCK_OUT" "${LOB_NAME} × ${BUNDLE}"; then
-                    tckedit "$TCK_IN" "$TCK_OUT" -include "$LOB_MASK" -template "$FA_MNI" -force -quiet
+                    tckedit "$TCK_IN" "$TCK_OUT" -include "$LOB_MASK" -force -quiet
                     N_TCK=$(tckinfo "$TCK_OUT" 2>/dev/null | grep ' count' | awk '{print $NF}' || echo 0)
                     [ "${N_TCK:-0}" -gt 0 ] && info "${LOB_NAME} × ${BUNDLE} : ${N_TCK} streamlines"
                 fi
