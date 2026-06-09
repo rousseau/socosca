@@ -21,9 +21,9 @@
 #   3. TractSeg — régions d'extrémité (endings_segmentation)
 #   4. TractSeg — Tract Orientation Maps (TOM)
 #   5. Tracking bundle-spécifique (Tracking — probabiliste sur TOM)
-#   6. Retour en espace sujet (flirt inverse)
+#   6. Export des bundles en espace MNI (pas de retour DWI)
 #   7. Filtrage : conserver uniquement les streamlines touchant le cervelet
-#      (masque DeepCeres — tous labels > 0 recalé en espace DWI)
+#      (masque DeepCeres — tous labels > 0 recalé en espace MNI)
 #   8. Statistiques de tractométrie par bundle
 #
 # Bundles cérébelleux TractSeg ciblés :
@@ -34,14 +34,14 @@
 #   CST_left / CST_right  (tractus cortico-spinal — connexions indirectes)
 #
 # Masque cérébelleux ROI :
-#   DeepCeres native_structures (tous labels > 0) recalé T1→DWI via flirt 6 dof
+#   DeepCeres native_structures (tous labels > 0) recalé T1→MNI via ANTs
 #
 # Sorties :
 #   results/tractseg/sub-XX/
 #     peaks/         peaks CSD en espace DWI et MNI
 #     registration/  matrices de transformation DWI↔MNI
 #     tractseg/      sorties brutes TractSeg (segmentations, TOM)
-#     bundles/       tractogrammes .tck par bundle (espace sujet)
+#     bundles/       tractogrammes .tck par bundle (espace MNI)
 #     cerebellum/    masque cérébelleuse + tractogrammes filtrés
 #     stats/         métriques DTI par bundle (TSV)
 #
@@ -179,6 +179,29 @@ skip_if_dir_exists() {
         return 0
     fi
     return 1
+}
+
+# Vérifie que l'en-tête géométrique d'un tractogramme est cohérent avec
+# l'image de référence (dimensions voxel-grid identiques).
+assert_tck_space_matches_image() {
+    local tck="$1"
+    local img="$2"
+    local label="$3"
+
+    local tck_dims img_dims
+    tck_dims=$(tckinfo "$tck" 2>/dev/null | awk -F'[()]' '/dimensions:/ {gsub(/ /, "", $2); print $2; exit}')
+    img_dims=$(mrinfo "$img" -size 2>/dev/null | awk '{print $1","$2","$3}')
+
+    if [ -z "$tck_dims" ] || [ -z "$img_dims" ]; then
+        warn "${label}: impossible de lire les dimensions (tck=${tck_dims:-NA}, img=${img_dims:-NA})"
+        return 1
+    fi
+
+    if [ "$tck_dims" != "$img_dims" ]; then
+        warn "${label}: dimensions incompatibles (tck=${tck_dims}, img=${img_dims})"
+        return 1
+    fi
+    return 0
 }
 
 # ---------------------------------------------------------------------------
@@ -401,92 +424,44 @@ for SUBJECT_ID in "${SUBJECTS[@]}"; do
     fi
 
     # ------------------------------------------------------------------
-    # ÉTAPE 6 : Retour en espace sujet (DWI natif)
-    # tcktransform attend un champ de déformation NIfTI 4D (pas une matrice .txt).
-    # Approche : warpinit crée un champ identité en espace MNI (coordonnées
-    # scanner stockées à chaque voxel), puis on applique la transform linéaire
-    # MNI→DWI à chaque vecteur stocké → champ de déformation utilisable par tcktransform.
+    # ÉTAPE 6 : Export bundles en espace MNI (cohérence stricte)
+    # Le retour MNI→DWI par champ custom est désactivé car non robuste.
     # ------------------------------------------------------------------
-    log "[6/8] Retransformation des streamlines MNI → espace DWI"
-
-    # 1. Composer les transformées inverses ANTs en un champ de déplacement MNI→DWI
-    # antsApplyTransforms -o [file,1] génère un champ de déplacement (mm) dans l'espace MNI.
-    ANTS_DISP="${OUT_REG}/${SUBJECT_ID}_from-MNI_to-dwi_ants-disp.nii.gz"
-    if ! skip_if_exists "$ANTS_DISP" "champ de déplacement ANTs MNI→DWI"; then
-        antsApplyTransforms \
-            -d 3 \
-            -o "[${ANTS_DISP},1]" \
-            -r "$FA_MNI" \
-            -t "[${ANTS_AFFINE},1]" \
-            -t "$ANTS_INV_WARP"
-        info "Champ de déplacement ANTs MNI→DWI : ${ANTS_DISP}"
-    fi
-
-    # 2. Convertir champ de déplacement ANTs (mm offset) → champ absolu MRtrix
-    # MRtrix tcktransform attend : chaque voxel (x_MNI) contient les coordonnées DWI absolues.
-    # Formule : x_DWI = x_MNI_world + displacement(x_MNI)
-    WARP_FIELD="${OUT_REG}/${SUBJECT_ID}_from-MNI_to-dwi_warp.nii.gz"
-    if ! skip_if_exists "$WARP_FIELD" "champ de déformation MNI→DWI (MRtrix)"; then
-        python3 - <<PYEOF
-import nibabel as nib
-import numpy as np
-
-# Champ de déplacement ANTs : chaque voxel en espace MNI stocke le déplacement en mm
-disp = nib.load("${ANTS_DISP}")
-data = disp.get_fdata()
-# ANTs peut produire (x,y,z,1,3) ou (x,y,z,3)
-if data.ndim == 5:
-    data = data[:, :, :, 0, :]
-shape = data.shape[:3]
-affine = disp.affine
-
-# Coordonnées monde (mm, RAS) de chaque voxel dans l'espace MNI
-i, j, k = np.meshgrid(np.arange(shape[0]), np.arange(shape[1]),
-                      np.arange(shape[2]), indexing='ij')
-vox = np.stack([i.ravel(), j.ravel(), k.ravel(), np.ones(i.size)], axis=0)  # 4×N
-world_mni = (affine @ vox).T[:, :3]  # N×3
-
-# x_DWI = x_MNI_world + déplacement (convention ANTs : déplacement en mm RAS)
-abs_coords = world_mni + data.reshape(-1, 3)
-
-out = nib.Nifti1Image(abs_coords.reshape(shape + (3,)).astype(np.float32),
-                      affine, disp.header)
-nib.save(out, "${WARP_FIELD}")
-print(f"  Champ MRtrix MNI→DWI (ANTs SyN) : {out.shape}")
-PYEOF
-    fi
+    log "[6/8] Export des bundles en espace MNI"
 
     IFS=',' read -ra BUNDLE_LIST <<< "$CEREB_BUNDLES"
 
     for BUNDLE in "${BUNDLE_LIST[@]}"; do
         TCK_MNI="${TS_TRACK_DIR}/${BUNDLE}.tck"
-        TCK_DWI="${OUT_BUNDLES}/${SUBJECT_ID}_bundle-${BUNDLE}_space-dwi.tck"
+        TCK_OUT_MNI="${OUT_BUNDLES}/${SUBJECT_ID}_bundle-${BUNDLE}_space-MNI.tck"
 
         [ -f "$TCK_MNI" ] || { warn "Tractogramme introuvable : ${TCK_MNI}"; continue; }
 
-        if ! skip_if_exists "$TCK_DWI" "bundle ${BUNDLE} (espace DWI)"; then
-            tcktransform "$TCK_MNI" "$WARP_FIELD" "$TCK_DWI" -force
-            info "${BUNDLE} → espace DWI : $(tckinfo "$TCK_DWI" | grep ' count' | awk '{print $NF}') streamlines"
+        if ! skip_if_exists "$TCK_OUT_MNI" "bundle ${BUNDLE} (espace MNI)"; then
+            # Re-écrit l'en-tête sur la grille FA_MNI pour éviter les ambiguïtés d'espace.
+            tckedit "$TCK_MNI" "$TCK_OUT_MNI" -template "$FA_MNI" -force -quiet
         fi
+
+        assert_tck_space_matches_image "$TCK_OUT_MNI" "$FA_MNI" "${SUBJECT_ID}/${BUNDLE}" \
+            || die "${SUBJECT_ID} : incohérence espace MNI détectée pour ${BUNDLE}"
+        info "${BUNDLE} (MNI) : $(tckinfo "$TCK_OUT_MNI" | awk -F': *' '/count:/ {print $2; exit}') streamlines"
     done
 
     # ------------------------------------------------------------------
-    # ÉTAPE 7 : Masque cérébelleux depuis DeepCeres
-    # Recalage atlas DeepCeres (espace T1 natif) → espace DWI (FA)
-    # Puis filtrage : conserver les streamlines touchant le masque
+    # ÉTAPE 7 : Masque cérébelleux DeepCeres en MNI + filtrage bundles
     # ------------------------------------------------------------------
-    log "[7/8] Filtrage par ROI cérébelleuse (DeepCeres)"
+    log "[7/8] Filtrage par ROI cérébelleuse (DeepCeres en MNI)"
 
     DEPC_BRAIN_T1="${OUT_REG}/${SUBJECT_ID}_space-T1w_desc-brain_T1w.nii.gz"
-    DEPC_STRUCT_DWI="${OUT_CEREB}/${SUBJECT_ID}_space-dwi_desc-deepceres_dseg.nii.gz"
-    CEREB_MASK_DWI="${OUT_CEREB}/${SUBJECT_ID}_space-dwi_desc-deepceres-all_mask.nii.gz"
+    DEPC_STRUCT_MNI="${OUT_CEREB}/${SUBJECT_ID}_space-MNI_desc-deepceres_dseg.nii.gz"
+    CEREB_MASK_MNI="${OUT_CEREB}/${SUBJECT_ID}_space-MNI_desc-deepceres-all_mask.nii.gz"
 
-    # 1. Brain-extract le T1 brut avec le masque DeepCeres pour le recalage
+    # 1. Brain-extract T1 avec le masque DeepCeres
     if ! skip_if_exists "$DEPC_BRAIN_T1" "T1 brain-extracted (masque DeepCeres)"; then
         python3 - <<PYEOF
 import nibabel as nib, numpy as np
 import nibabel.processing as nbp
-t1   = nib.load("${T1_ORIG}")
+t1 = nib.load("${T1_ORIG}")
 mask = nib.load("${DEPC_MASK_NAT}")
 mask_res = nbp.resample_from_to(mask, t1, order=0)
 out = (t1.get_fdata() * (mask_res.get_fdata() > 0)).astype(np.float32)
@@ -496,7 +471,7 @@ PYEOF
         info "T1 brain-extracted : ${DEPC_BRAIN_T1}"
     fi
 
-    # 2. Registration T1→DWI via ANTs rigid (plus robuste que flirt sur macOS ARM)
+    # 2. Registration T1→DWI (rigide) pour chaîner T1→DWI→MNI
     ANTS_RIGID_PREFIX="${OUT_REG}/${SUBJECT_ID}_from-T1-to-dwi_"
     ANTS_RIGID_MAT="${ANTS_RIGID_PREFIX}0GenericAffine.mat"
 
@@ -517,70 +492,67 @@ PYEOF
         info "Transformation ANTs rigid T1→DWI : ${ANTS_RIGID_MAT}"
     fi
 
-    # 3. Recaler l'atlas DeepCeres en espace DWI (nearest neighbour via ANTs)
-    if ! skip_if_exists "$DEPC_STRUCT_DWI" "atlas DeepCeres (espace DWI)"; then
+    # 3. Recaler l'atlas DeepCeres de T1 vers MNI (via T1→DWI puis DWI→MNI)
+    if ! skip_if_exists "$DEPC_STRUCT_MNI" "atlas DeepCeres (espace MNI)"; then
         antsApplyTransforms \
             -d 3 \
-            -r "$FA" \
+            -r "$MNI_TEMPLATE" \
             -i "$DEPC_STRUCT_NAT" \
-            -o "$DEPC_STRUCT_DWI" \
+            -o "$DEPC_STRUCT_MNI" \
             -n NearestNeighbor \
+            -t "$ANTS_WARP" \
+            -t "$ANTS_AFFINE" \
             -t "$ANTS_RIGID_MAT"
-        info "Atlas DeepCeres recalé en espace DWI : ${DEPC_STRUCT_DWI}"
+        info "Atlas DeepCeres recalé en espace MNI : ${DEPC_STRUCT_MNI}"
     fi
 
-    # 4. Masque binaire = tous labels > 0
-    if ! skip_if_exists "$CEREB_MASK_DWI" "masque cérébelleux complet (DeepCeres)"; then
+    # 4. Masque binaire MNI = tous labels > 0
+    if ! skip_if_exists "$CEREB_MASK_MNI" "masque cérébelleux complet (MNI)"; then
         python3 - <<PYEOF
 import nibabel as nib, numpy as np
-s = nib.load("${DEPC_STRUCT_DWI}")
+s = nib.load("${DEPC_STRUCT_MNI}")
 mask = (s.get_fdata() > 0).astype(np.uint8)
-nib.save(nib.Nifti1Image(mask, s.affine, s.header), "${CEREB_MASK_DWI}")
-print(f"  Masque DeepCeres complet : {int(mask.sum())} voxels")
+nib.save(nib.Nifti1Image(mask, s.affine, s.header), "${CEREB_MASK_MNI}")
+print(f"  Masque DeepCeres complet (MNI) : {int(mask.sum())} voxels")
 PYEOF
-        info "Masque cérébelleux DeepCeres : ${CEREB_MASK_DWI}"
+        info "Masque cérébelleux DeepCeres : ${CEREB_MASK_MNI}"
     fi
 
-    # Filtrer chaque tractogramme bundle : garder les streamlines passant par le cervelet
+    # 5. Filtrage bundles en espace MNI
     for BUNDLE in "${BUNDLE_LIST[@]}"; do
-        TCK_DWI="${OUT_BUNDLES}/${SUBJECT_ID}_bundle-${BUNDLE}_space-dwi.tck"
-        TCK_CEREB="${OUT_CEREB}/${SUBJECT_ID}_bundle-${BUNDLE}_cerebellar.tck"
-        TCK_DENSITY="${OUT_CEREB}/${SUBJECT_ID}_bundle-${BUNDLE}_density.nii.gz"
+        TCK_MNI="${OUT_BUNDLES}/${SUBJECT_ID}_bundle-${BUNDLE}_space-MNI.tck"
+        TCK_CEREB="${OUT_CEREB}/${SUBJECT_ID}_bundle-${BUNDLE}_space-MNI_cerebellar.tck"
+        TCK_DENSITY="${OUT_CEREB}/${SUBJECT_ID}_bundle-${BUNDLE}_space-MNI_density.nii.gz"
 
-        [ -f "$TCK_DWI" ] || { warn "Tractogramme DWI introuvable pour ${BUNDLE}"; continue; }
+        [ -f "$TCK_MNI" ] || { warn "Tractogramme MNI introuvable pour ${BUNDLE}"; continue; }
 
         if ! skip_if_exists "$TCK_CEREB" "filtrage cérébelleux ${BUNDLE}"; then
-            # Conserver les streamlines dont au moins un point est dans le masque cérébelleux
-            tckedit "$TCK_DWI" "$TCK_CEREB" \
-                -include "$CEREB_MASK_DWI" \
-                -force
-            N=$(tckinfo "$TCK_CEREB" 2>/dev/null | grep ' count' | awk '{print $NF}' || echo "?")
-            info "${BUNDLE} cérébelleux : ${N} streamlines"
+            tckedit "$TCK_MNI" "$TCK_CEREB" -include "$CEREB_MASK_MNI" -template "$FA_MNI" -force -quiet
+            assert_tck_space_matches_image "$TCK_CEREB" "$FA_MNI" "${SUBJECT_ID}/${BUNDLE}/cerebellar" \
+                || die "${SUBJECT_ID} : incohérence espace MNI après filtrage ${BUNDLE}"
+            N=$(tckinfo "$TCK_CEREB" 2>/dev/null | awk -F': *' '/count:/ {print $2; exit}' || echo "?")
+            info "${BUNDLE} cérébelleux (MNI) : ${N} streamlines"
         fi
 
-        # Carte de densité (TDI) pour le bundle cérébelleux filtré
         if ! skip_if_exists "$TCK_DENSITY" "densité ${BUNDLE}"; then
-            tckmap "$TCK_CEREB" "$TCK_DENSITY" \
-                -template "$FA" \
-                -force -quiet
+            tckmap "$TCK_CEREB" "$TCK_DENSITY" -template "$FA_MNI" -force -quiet
         fi
     done
 
-    # TDI globale : tous les bundles cérébelleux fusionnés en espace DWI
-    # Utile pour vérifier visuellement que le recalage est correct (overlay sur FA)
-    TCK_ALL_CEREB="${OUT_CEREB}/${SUBJECT_ID}_all-cerebellar.tck"
-    TDI_ALL_CEREB="${OUT_CEREB}/${SUBJECT_ID}_tdi-all-cerebellar.nii.gz"
+    # TDI globale en MNI
+    TCK_ALL_CEREB="${OUT_CEREB}/${SUBJECT_ID}_all-cerebellar_space-MNI.tck"
+    TDI_ALL_CEREB="${OUT_CEREB}/${SUBJECT_ID}_tdi-all-cerebellar_space-MNI.nii.gz"
 
     if ! skip_if_exists "$TCK_ALL_CEREB" "fusion tous bundles cérébelleux"; then
         CEREB_TCKS=()
         for BUNDLE in "${BUNDLE_LIST[@]}"; do
-            TCK_CEREB="${OUT_CEREB}/${SUBJECT_ID}_bundle-${BUNDLE}_cerebellar.tck"
+            TCK_CEREB="${OUT_CEREB}/${SUBJECT_ID}_bundle-${BUNDLE}_space-MNI_cerebellar.tck"
             [ -f "$TCK_CEREB" ] && CEREB_TCKS+=("$TCK_CEREB")
         done
         if [ "${#CEREB_TCKS[@]}" -gt 0 ]; then
-            tckedit "${CEREB_TCKS[@]}" "$TCK_ALL_CEREB" -force -quiet
-            N_ALL=$(tckinfo "$TCK_ALL_CEREB" 2>/dev/null | grep ' count' | awk '{print $NF}' || echo "?")
-            info "Fusion cérébelleux : ${N_ALL} streamlines → ${TCK_ALL_CEREB}"
+            tckedit "${CEREB_TCKS[@]}" "$TCK_ALL_CEREB" -template "$FA_MNI" -force -quiet
+            N_ALL=$(tckinfo "$TCK_ALL_CEREB" 2>/dev/null | awk -F': *' '/count:/ {print $2; exit}' || echo "?")
+            info "Fusion cérébelleux (MNI) : ${N_ALL} streamlines → ${TCK_ALL_CEREB}"
         else
             warn "Aucun bundle cérébelleux disponible pour la fusion"
         fi
@@ -588,89 +560,78 @@ PYEOF
 
     if ! skip_if_exists "$TDI_ALL_CEREB" "TDI globale cérébelleux"; then
         [ -f "$TCK_ALL_CEREB" ] && \
-        tckmap "$TCK_ALL_CEREB" "$TDI_ALL_CEREB" \
-            -template "$FA" \
-            -force -quiet && \
-        info "TDI globale cérébelleux : ${TDI_ALL_CEREB}"
+        tckmap "$TCK_ALL_CEREB" "$TDI_ALL_CEREB" -template "$FA_MNI" -force -quiet && \
+        info "TDI globale cérébelleux (MNI) : ${TDI_ALL_CEREB}"
     fi
 
     # ------------------------------------------------------------------
-    # ÉTAPE 8 : Métriques DTI par bundle (tractométrie simple)
+    # ÉTAPE 8 : Tableau QC des bundles (espace MNI uniquement)
+    # Les métriques DTI voxelwise sont désactivées ici pour éviter tout
+    # mélange d'espaces (FA/MD/AD/RD sont en espace DWI natif).
     # ------------------------------------------------------------------
-    log "[8/8] Métriques DTI par bundle (tractométrie)"
+    log "[8/8] Tableau QC des bundles (MNI)"
 
     STATS_TSV="${OUT_STATS}/${SUBJECT_ID}_tractseg_cerebellum_stats.tsv"
 
-    if ! skip_if_exists "$STATS_TSV" "métriques tractométrie"; then
-        MD="${IN_DWI}/${SUBJECT_ID}_model-DTI_param-MD_dti.nii.gz"
-        AD="${IN_DWI}/${SUBJECT_ID}_model-DTI_param-AD_dti.nii.gz"
-        RD="${IN_DWI}/${SUBJECT_ID}_model-DTI_param-RD_dti.nii.gz"
-
+    if ! skip_if_exists "$STATS_TSV" "tableau QC bundles"; then
         python3 - <<PYEOF
-import nibabel as nib
-import numpy as np
 import csv, os
+import nibabel as nib
 
 subject = "${SUBJECT_ID}"
 bundles = [b.strip() for b in "${CEREB_BUNDLES}".split(",")]
 out_dir = "${OUT_CEREB}"
-stats_dir = "${OUT_STATS}"
-
-metrics = {
-    "FA":  "${FA}",
-    "MD":  "${MD}",
-    "AD":  "${AD}",
-    "RD":  "${RD}",
-}
-
 rows = []
+
 for bundle in bundles:
-    density_file = os.path.join(out_dir, f"{subject}_bundle-{bundle}_density.nii.gz")
-    if not os.path.isfile(density_file):
-        print(f"  [SKIP] densité introuvable pour {bundle}")
+    tck_file = os.path.join(out_dir, f"{subject}_bundle-{bundle}_space-MNI_cerebellar.tck")
+    density_file = os.path.join(out_dir, f"{subject}_bundle-{bundle}_space-MNI_density.nii.gz")
+    if not os.path.isfile(tck_file):
         continue
 
-    density = nib.load(density_file).get_fdata()
-    if density.sum() == 0:
-        print(f"  [WARN] densité nulle pour {bundle}")
-        continue
+    # Lecture du count via header MRtrix (fallback NA)
+    count = "NA"
+    try:
+        import subprocess
+        r = subprocess.run(["tckinfo", tck_file], capture_output=True, text=True, check=False)
+        for line in r.stdout.splitlines():
+            if line.strip().startswith("count:"):
+                count = line.split(":", 1)[1].strip()
+                break
+    except Exception:
+        pass
 
-    # Masque pondéré par densité (streamline count > 0)
-    wmask = density > 0
-    n_vox = int(wmask.sum())
+    n_vox = "NA"
+    if os.path.isfile(density_file):
+        d = nib.load(density_file).get_fdata()
+        n_vox = int((d > 0).sum())
 
-    row = {"subject": subject, "bundle": bundle, "n_voxels": n_vox}
-    for mname, mpath in metrics.items():
-        if not os.path.isfile(mpath):
-            row[mname + "_mean"] = "NA"
-            row[mname + "_std"] = "NA"
-            continue
-        mdata = nib.load(mpath).get_fdata()
-        vals = mdata[wmask]
-        vals = vals[np.isfinite(vals)]
-        row[mname + "_mean"] = round(float(np.mean(vals)), 6) if len(vals) > 0 else "NA"
-        row[mname + "_std"]  = round(float(np.std(vals)), 6)  if len(vals) > 0 else "NA"
-    rows.append(row)
-    print(f"  {bundle}: {n_vox} voxels, FA={row.get('FA_mean','NA')}")
+    rows.append({
+        "subject": subject,
+        "bundle": bundle,
+        "space": "MNI",
+        "streamlines": count,
+        "density_nonzero_voxels": n_vox,
+        "note": "DTI metrics skipped to avoid cross-space bias"
+    })
 
 if rows:
-    fieldnames = list(rows[0].keys())
     with open("${STATS_TSV}", "w", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=fieldnames, delimiter="\t")
+        writer = csv.DictWriter(f, fieldnames=list(rows[0].keys()), delimiter="\t")
         writer.writeheader()
         writer.writerows(rows)
-    print(f"  Statistiques sauvegardées : ${STATS_TSV}")
+    print(f"  Tableau QC sauvegardé : ${STATS_TSV}")
 else:
     print("  [WARN] Aucune statistique calculée")
 PYEOF
-        info "Métriques DTI par bundle → ${STATS_TSV}"
+        info "Tableau QC par bundle → ${STATS_TSV}"
     fi
 
     # ------------------------------------------------------------------
-    # ÉTAPE 9 : Bundles QC (CST + AF) → espace DWI
+    # ÉTAPE 9 : Bundles QC (CST + AF) en espace MNI
     # TractSeg TOM déjà calculés pour tous les bundles à l'étape 4
     # ------------------------------------------------------------------
-    log "[9/12] Bundles QC (CST + AF) — tracking + transformation DWI"
+    log "[9/12] Bundles QC (CST + AF) — export MNI"
 
     OUT_FIGS="${OUT}/figures"
     mkdir -p "$OUT_FIGS"
@@ -688,19 +649,21 @@ PYEOF
 
     for BUNDLE in CST_left CST_right AF_left AF_right; do
         TCK_MNI="${TS_TRACK_DIR}/${BUNDLE}.tck"
-        TCK_DWI="${OUT_BUNDLES}/${SUBJECT_ID}_bundle-${BUNDLE}_space-dwi.tck"
+        TCK_MNI_OUT="${OUT_BUNDLES}/${SUBJECT_ID}_bundle-${BUNDLE}_space-MNI.tck"
         [ -f "$TCK_MNI" ] || { warn "Tractogramme QC introuvable : ${TCK_MNI}"; continue; }
-        if ! skip_if_exists "$TCK_DWI" "bundle QC ${BUNDLE} (espace DWI)"; then
-            tcktransform "$TCK_MNI" "$WARP_FIELD" "$TCK_DWI" -force
-            info "${BUNDLE} → espace DWI : $(tckinfo "$TCK_DWI" | grep ' count' | awk '{print $NF}') streamlines"
+        if ! skip_if_exists "$TCK_MNI_OUT" "bundle QC ${BUNDLE} (espace MNI)"; then
+            tckedit "$TCK_MNI" "$TCK_MNI_OUT" -template "$FA_MNI" -force -quiet
+            assert_tck_space_matches_image "$TCK_MNI_OUT" "$FA_MNI" "${SUBJECT_ID}/${BUNDLE}/QC" \
+                || die "${SUBJECT_ID}/${BUNDLE} : incohérence espace MNI (QC)"
+            info "${BUNDLE} (MNI QC) : $(tckinfo "$TCK_MNI_OUT" | awk -F': *' '/count:/ {print $2; exit}') streamlines"
         fi
     done
 
     # ------------------------------------------------------------------
-    # ÉTAPE 10 : Atlas DeepCeres par lobule (déjà recalé en espace DWI à l'étape 7)
-    # DEPC_STRUCT_DWI, MAT_T12DWI et CEREB_MASK_DWI sont définis à l'étape 7.
+    # ÉTAPE 10 : Atlas DeepCeres par lobule (espace MNI)
+    # DEPC_STRUCT_MNI et CEREB_MASK_MNI sont définis à l'étape 7.
     # ------------------------------------------------------------------
-    log "[10/12] Atlas DeepCeres lobulaire (espace DWI)"
+    log "[10/12] Atlas DeepCeres lobulaire (espace MNI)"
 
     # Tableaux parallèles : labels D (1-12) et noms des lobules
     # Labels G = label D + 100 ; labels 13 / 113 = WM (non utilisé pour figures)
@@ -710,10 +673,10 @@ PYEOF
     DEEPCERES_OK=false
     OUT_LOBULES="${OUT_CEREB}/per_lobule"
 
-    if [ -f "$DEPC_STRUCT_DWI" ]; then
+    if [ -f "$DEPC_STRUCT_MNI" ]; then
         DEEPCERES_OK=true
     else
-        warn "${SUBJECT_ID} : DEPC_STRUCT_DWI absent (${DEPC_STRUCT_DWI}) — étapes 10-12 ignorées"
+        warn "${SUBJECT_ID} : DEPC_STRUCT_MNI absent (${DEPC_STRUCT_MNI}) — étapes 10-12 ignorées"
     fi
 
     # ------------------------------------------------------------------
@@ -723,20 +686,20 @@ PYEOF
     if [ "$DEEPCERES_OK" = "true" ]; then
 
         # TDI globale basée sur le masque cérébelleux complet DeepCeres
-        # (CEREB_MASK_DWI = tous labels > 0, calculé à l'étape 7)
+        # (CEREB_MASK_MNI = tous labels > 0, calculé à l'étape 7)
         TCK_DEPC_ALL="${OUT_CEREB}/${SUBJECT_ID}_all-cerebellar-deepceres.tck"
         TDI_DEPC_ALL="${OUT_CEREB}/${SUBJECT_ID}_tdi-deepceres-cerebellum.nii.gz"
 
         if ! skip_if_exists "$TDI_DEPC_ALL" "TDI cérébelleux complet DeepCeres"; then
-            if [ -f "$TCK_ALL_CEREB" ] && [ -f "$CEREB_MASK_DWI" ]; then
+            if [ -f "$TCK_ALL_CEREB" ] && [ -f "$CEREB_MASK_MNI" ]; then
                 tckedit "$TCK_ALL_CEREB" "$TCK_DEPC_ALL" \
-                    -include "$CEREB_MASK_DWI" -force -quiet
+                    -include "$CEREB_MASK_MNI" -template "$FA_MNI" -force -quiet
                 tckmap "$TCK_DEPC_ALL" "$TDI_DEPC_ALL" \
-                    -template "$FA" -force -quiet
+                    -template "$FA_MNI" -force -quiet
                 N_DEPC=$(tckinfo "$TCK_DEPC_ALL" 2>/dev/null | grep ' count' | awk '{print $NF}' || echo "?")
                 info "TDI DeepCeres cervelet : ${N_DEPC} streamlines → ${TDI_DEPC_ALL}"
             else
-                warn "TDI DeepCeres ignorée : ${TCK_ALL_CEREB} ou ${CEREB_MASK_DWI} manquant"
+                warn "TDI DeepCeres ignorée : ${TCK_ALL_CEREB} ou ${CEREB_MASK_MNI} manquant"
             fi
         fi
 
@@ -753,7 +716,7 @@ PYEOF
             if ! skip_if_exists "$LOB_MASK" "masque ${LOB_NAME} bilatéral"; then
                 python3 - <<PYEOF
 import nibabel as nib, numpy as np
-s = nib.load("${DEPC_STRUCT_DWI}")
+s = nib.load("${DEPC_STRUCT_MNI}")
 d = s.get_fdata()
 mask = ((d == ${LABEL_R}) | (d == ${LABEL_L})).astype(np.uint8)
 nib.save(nib.Nifti1Image(mask, s.affine, s.header), "${LOB_MASK}")
@@ -767,11 +730,11 @@ print(int(nib.load('${LOB_MASK}').get_fdata().sum()))" 2>/dev/null || echo 0)
             [ "${N_MASK:-0}" -gt 0 ] || continue
 
             for BUNDLE in "${BUNDLE_LIST[@]}"; do
-                TCK_IN="${OUT_BUNDLES}/${SUBJECT_ID}_bundle-${BUNDLE}_space-dwi.tck"
+                TCK_IN="${OUT_BUNDLES}/${SUBJECT_ID}_bundle-${BUNDLE}_space-MNI.tck"
                 TCK_OUT="${OUT_LOBULES}/${SUBJECT_ID}_bundle-${BUNDLE}_desc-deepceres-${LOB_NAME}.tck"
                 [ -f "$TCK_IN" ] || continue
                 if ! skip_if_exists "$TCK_OUT" "${LOB_NAME} × ${BUNDLE}"; then
-                    tckedit "$TCK_IN" "$TCK_OUT" -include "$LOB_MASK" -force -quiet
+                    tckedit "$TCK_IN" "$TCK_OUT" -include "$LOB_MASK" -template "$FA_MNI" -force -quiet
                     N_TCK=$(tckinfo "$TCK_OUT" 2>/dev/null | grep ' count' | awk '{print $NF}' || echo 0)
                     [ "${N_TCK:-0}" -gt 0 ] && info "${LOB_NAME} × ${BUNDLE} : ${N_TCK} streamlines"
                 fi
@@ -815,7 +778,7 @@ print(int(nib.load('${LOB_MASK}').get_fdata().sum()))" 2>/dev/null || echo 0)
     if ! skip_if_exists "$FIG1" "figure QC bundles (mrview)"; then
         MRVIEW_ARGS=()
         for BUNDLE in CST_left CST_right AF_left AF_right; do
-            TCK="${OUT_BUNDLES}/${SUBJECT_ID}_bundle-${BUNDLE}_space-dwi.tck"
+            TCK="${OUT_BUNDLES}/${SUBJECT_ID}_bundle-${BUNDLE}_space-MNI.tck"
             [ -f "$TCK" ] || continue
             MRVIEW_ARGS+=(
                 -tractography.load "$TCK"
@@ -825,7 +788,7 @@ print(int(nib.load('${LOB_MASK}').get_fdata().sum()))" 2>/dev/null || echo 0)
                 -tractography.thickness 0.2
             )
         done
-        mrview "$FA" \
+        mrview "$FA_MNI" \
             -mode 1 -plane 1 \
             -size 1920,1080 -noannotations \
             "${MRVIEW_ARGS[@]}" \
@@ -842,7 +805,7 @@ print(int(nib.load('${LOB_MASK}').get_fdata().sum()))" 2>/dev/null || echo 0)
         MRVIEW_ARGS=()
         IFS=',' read -ra BUNDLE_LIST_FIG <<< "$CEREB_BUNDLES"
         for BUNDLE in "${BUNDLE_LIST_FIG[@]}"; do
-            TCK="${OUT_CEREB}/${SUBJECT_ID}_bundle-${BUNDLE}_cerebellar.tck"
+            TCK="${OUT_CEREB}/${SUBJECT_ID}_bundle-${BUNDLE}_space-MNI_cerebellar.tck"
             [ -f "$TCK" ] || continue
             MRVIEW_ARGS+=(
                 -tractography.load "$TCK"
@@ -853,15 +816,15 @@ print(int(nib.load('${LOB_MASK}').get_fdata().sum()))" 2>/dev/null || echo 0)
             )
         done
         OVERLAY_ARGS=()
-        if [ "$DEEPCERES_OK" = "true" ] && [ -f "$DEPC_STRUCT_DWI" ]; then
+        if [ "$DEEPCERES_OK" = "true" ] && [ -f "$DEPC_STRUCT_MNI" ]; then
             OVERLAY_ARGS=(
-                -overlay.load "$DEPC_STRUCT_DWI"
+                -overlay.load "$DEPC_STRUCT_MNI"
                 -overlay.colourmap 3
                 -overlay.opacity 0.35
                 -overlay.no_threshold_min
             )
         fi
-        mrview "$FA" \
+        mrview "$FA_MNI" \
             -mode 1 -plane 0 \
             -size 1920,1080 -noannotations \
             "${OVERLAY_ARGS[@]}" \
@@ -899,7 +862,7 @@ print(int(nib.load('${LOB_MASK}').get_fdata().sum()))" 2>/dev/null || echo 0)
                     HAS_TCK=true
                 done
                 [ "$HAS_TCK" = "true" ] || continue
-                mrview "$FA" \
+                mrview "$FA_MNI" \
                     -mode 1 -plane 0 \
                     -size 1920,1080 -noannotations \
                     -overlay.load "$LOB_MASK" \
