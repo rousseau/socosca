@@ -35,12 +35,12 @@ sub-XX/
 
 ### Sujets disponibles
 
-| Sujet  | T1 anat | DWI b1000 | DWI b2000 | AP/PA b0 | Notes                            |
-|--------|---------|-----------|-----------|----------|----------------------------------|
-| sub-01 | ✓       | 35 vol    | 71 vol    | ✓        | + T1 3D & fMRI (DeIdentified)    |
-| sub-02 | ✓       | 35 vol    | 71 vol    | ✓        | + T1 3D & fMRI (DeIdentified)    |
-| sub-03 | ✓       | 35 vol    | 71 vol    | ✓        | + fMRI (DeIdentified)            |
-| sub-04 | ✓       | 35 vol    | 71 vol    | ✓        | + fMRI (DeIdentified)            |
+| Sujet  | T1 anat | DWI b1000 | DWI b2000 | AP/PA b0 |
+|--------|---------|-----------|-----------|----------|
+| sub-01 | ✓       | 35 vol    | 71 vol    | ✓        |
+| sub-02 | ✓       | 35 vol    | 71 vol    | ✓        |
+| sub-03 | ✓       | 35 vol    | 71 vol    | ✓        |
+| sub-04 | ✓       | 35 vol    | 71 vol    | ✓        |
 
 ---
 
