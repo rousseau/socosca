@@ -59,6 +59,11 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
 source "${SCRIPT_DIR}/../config/machine.sh"
 
 # FSL : FSLDIR est défini par machine.sh, sourcer fsl.sh
+# LD_LIBRARY_PATH pré-FSL sauvegardé pour restauration avant l'appel ANTs
+# (étape 4) : les installs FSL conda embarquent leurs propres bibliothèques
+# (libstdc++, etc.) et fsl.sh pointe LD_LIBRARY_PATH dessus, ce qui casse
+# N4BiasFieldCorrection (ABI mismatch → "Invalid flag provided" incohérent).
+_LD_LIBRARY_PATH_PRE_FSL="${LD_LIBRARY_PATH:-}"
 if [ -f "${FSLDIR}/etc/fslconf/fsl.sh" ]; then
     set +eu
     # shellcheck disable=SC1090
@@ -449,7 +454,9 @@ for SUBJECT_ID in "${SUBJECTS[@]}"; do
 
     # Sentinelle : DWI_BIASCORR est supprimé après l'étape 8 (FOD)
     if ! step_done 4 "correction biais B1 (dwibiascorrect)"; then
-        dwibiascorrect ants "$DWI_PREPROC" "$DWI_BIASCORR" \
+        # LD_LIBRARY_PATH restauré à sa valeur pré-FSL pour cet appel : voir
+        # commentaire sur _LD_LIBRARY_PATH_PRE_FSL plus haut dans ce script.
+        LD_LIBRARY_PATH="${_LD_LIBRARY_PATH_PRE_FSL}" dwibiascorrect ants "$DWI_PREPROC" "$DWI_BIASCORR" \
             -bias "$BIAS_FIELD" \
             -nthreads "$NTHR" -force
         mark_done 4

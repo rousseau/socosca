@@ -73,7 +73,13 @@ fi
 # Vérification ANTs : même type d'erreur cryptique (dwibiascorrect échoue en
 # plein milieu du pipeline) si ANTS_BIN ne correspond pas à l'installation
 # réelle sur cette machine.
-if ! command -v N4BiasFieldCorrection >/dev/null 2>&1; then
+if command -v N4BiasFieldCorrection >/dev/null 2>&1; then
+    if ! N4BiasFieldCorrection --version >/dev/null 2>&1; then
+        echo "  [WARN] N4BiasFieldCorrection trouvé mais ne s'exécute pas correctement" >&2
+        echo "         (souvent : LD_LIBRARY_PATH pollué par un autre outil, ex. FSL conda)" >&2
+        echo "         Tester manuellement :  N4BiasFieldCorrection --version" >&2
+    fi
+else
     echo "  [WARN] N4BiasFieldCorrection introuvable (ANTS_BIN=${ANTS_BIN:-non défini})" >&2
     echo "         Requis par scripts/02_mrtrix_pipeline.sh (dwibiascorrect ants)." >&2
     echo "         Localiser l'installation ANTs réelle :  find / -iname N4BiasFieldCorrection 2>/dev/null" >&2
