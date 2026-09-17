@@ -59,4 +59,15 @@ source "$_PROFILE_FILE"
 # shellcheck disable=SC1091
 source "${_CONFIG_DIR}/garage.sh"
 
+# Vérification FSL topup : erreur fréquente et cryptique (dwifslpreproc échoue
+# en plein milieu du pipeline) si FSLDIR ne correspond pas à l'installation
+# réelle sur cette machine (le défaut par profil est une supposition).
+if [ -n "${FSLDIR:-}" ] && [ ! -f "${FSLDIR}/etc/flirtsch/b02b0.cnf" ]; then
+    echo "  [WARN] Config topup introuvable : ${FSLDIR}/etc/flirtsch/b02b0.cnf" >&2
+    echo "         FSLDIR semble incorrect pour cette machine (profil ${_PROFILE})." >&2
+    echo "         Localiser l'installation FSL réelle :  find / -iname b02b0.cnf 2>/dev/null" >&2
+    echo "         Puis corriger FSLDIR dans config/${_PROFILE}.sh, ou l'exporter avant l'appel :" >&2
+    echo "           FSLDIR=/chemin/reel bash scripts/02_mrtrix_pipeline.sh ..." >&2
+fi
+
 echo "  [config] machine=${MACHINE_ID} | threads=${NTHR_DEFAULT} | siam=${SIAM_AVAILABLE}"
