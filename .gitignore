@@ -1,4 +1,4 @@
-results/
+derivatives/
 __pycache__/
 *.pyc
 .DS_Store
