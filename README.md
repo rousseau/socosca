@@ -13,21 +13,24 @@ Note : les chemins locaux sont configurés dans `config/machine.sh` et ne sont p
 
 ## Structure des données d'entrée
 
-Organisation attendue par sujet :
+Format BIDS, par sujet (voir `scripts/01b_import_new_data.sh` pour convertir de
+nouvelles données brutes vers cette structure) :
 
 ```text
 sub-XX/
 |-- anat/
-|   |-- T1.nii.gz           # Image anatomique T1w
-|   `-- T1.json             # Métadonnées associées
-`-- dwi/
-    |-- dwi_b1000.nii[.gz]  # DWI + fichiers .bval/.bvec/.json
-    |-- dwi_b2000.nii[.gz]  # DWI + fichiers .bval/.bvec/.json
-    |-- dwi_AP.nii[.gz]     # b0 AP (correction de distorsion)
-    |-- dwi_AP.json
-    |-- dwi_PA.nii[.gz]     # b0 PA (correction de distorsion)
-    `-- dwi_PA.json
+|   |-- sub-XX_T1w.nii[.gz]        # Image anatomique T1w
+|   `-- sub-XX_T1w.json            # Métadonnées associées
+|-- dwi/
+|   |-- sub-XX_acq-b1000_dwi.nii[.gz]  # DWI + .bval/.bvec/.json
+|   `-- sub-XX_acq-b2000_dwi.nii[.gz]  # DWI + .bval/.bvec/.json
+`-- fmap/
+    |-- sub-XX_dir-AP_epi.nii[.gz] + .json  # b0 AP (topup, IntendedFor -> dwi/)
+    `-- sub-XX_dir-PA_epi.nii[.gz] + .json  # b0 PA (topup, IntendedFor -> dwi/)
 ```
+
+`dataset_description.json` et `participants.tsv` sont générés/complétés à la
+racine du jeu de données par le script d'import.
 
 ---
 
@@ -37,14 +40,20 @@ sub-XX/
 scripts/
 |-- 00_data_overview.sh       # Inspection des données (dimensions, volumes, b-values)
 |-- 01_zip_nii.sh             # Compression NIfTI (.nii -> .nii.gz)
+|-- 01b_import_new_data.sh    # Import de nouvelles données (Patients/Temoins) vers sub-XX
 |-- 02_mrtrix_pipeline.sh     # Pipeline diffusion principal
 |-- 03_qc_plots.py            # Figures de QC
 |-- 04_siam_segmentation.sh
 |-- 05_freesurfer_segmentation.sh
 |-- 06_tractseg_cerebellum.sh
 `-- 07_scilpy_cerebellum.sh
+```
 
-results/
+Chaque script de traitement lit/écrit dans un répertoire de travail local
+(sourcedata/derivatives), structuré ainsi :
+
+```text
+derivatives/
 |-- mrtrix/sub-XX/{anat,dwi,tractography}/
 |-- tractseg/sub-XX/
 |-- scilpy/sub-XX/
@@ -72,6 +81,13 @@ Script principal : `scripts/02_mrtrix_pipeline.sh`
 7. Tractographie iFOD2 (tckgen) et pondération SIFT2 (tcksift2).
 8. Génération des figures de QC.
 
+Le script travaille dans un répertoire de travail local dédié (`--work-dir`,
+par défaut `~/socosca-work`) : il rapatrie automatiquement le sujet depuis le
+stockage centralisé (rclone) avant calcul, puis repousse les dérivés une fois
+terminé. Utiliser `--no-pull`/`--no-push` pour travailler entièrement en local
+(ex. sur des données déjà présentes), et `--sub <id>` pour ne traiter qu'un
+seul sujet. Voir `bash scripts/02_mrtrix_pipeline.sh --help`.
+
 ---
 
 ## Dépendances
@@ -79,12 +95,7 @@ Script principal : `scripts/02_mrtrix_pipeline.sh`
 - MRtrix3
 - FSL (topup, eddy)
 - ANTs
+- rclone (rapatriement/publication des données par le pipeline)
 - Python 3 + matplotlib (QC)
 
----
 
-## Confidentialité
-
-- Ne pas versionner de données brutes, dérivées sensibles ou informations d'infrastructure.
-- Éviter d'exposer des chemins personnels, adresses IP, hôtes ou identifiants dans les scripts et la documentation.
-- Conserver uniquement des exemples génériques et des noms de sujets pseudonymisés (ex. `sub-01`).
