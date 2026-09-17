@@ -70,4 +70,15 @@ if [ -n "${FSLDIR:-}" ] && [ ! -f "${FSLDIR}/etc/flirtsch/b02b0.cnf" ]; then
     echo "           FSLDIR=/chemin/reel bash scripts/02_mrtrix_pipeline.sh ..." >&2
 fi
 
+# Vérification ANTs : même type d'erreur cryptique (dwibiascorrect échoue en
+# plein milieu du pipeline) si ANTS_BIN ne correspond pas à l'installation
+# réelle sur cette machine.
+if ! command -v N4BiasFieldCorrection >/dev/null 2>&1; then
+    echo "  [WARN] N4BiasFieldCorrection introuvable (ANTS_BIN=${ANTS_BIN:-non défini})" >&2
+    echo "         Requis par scripts/02_mrtrix_pipeline.sh (dwibiascorrect ants)." >&2
+    echo "         Localiser l'installation ANTs réelle :  find / -iname N4BiasFieldCorrection 2>/dev/null" >&2
+    echo "         Puis corriger ANTS_BIN dans config/${_PROFILE}.sh, ou l'exporter avant l'appel :" >&2
+    echo "           ANTS_BIN=/chemin/reel/bin bash scripts/02_mrtrix_pipeline.sh ..." >&2
+fi
+
 echo "  [config] machine=${MACHINE_ID} | threads=${NTHR_DEFAULT} | siam=${SIAM_AVAILABLE}"
