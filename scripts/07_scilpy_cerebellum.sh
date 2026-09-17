@@ -14,14 +14,14 @@
 #   - FSL, conda/miniforge3
 #
 # Données d'entrée :
-#   results/mrtrix/sub-XX/tractography/
+#   derivatives/mrtrix/sub-XX/tractography/
 #     sub-XX_desc-iFOD2sift2_200k.tck         (tractogramme whole-brain)
-#   results/mrtrix/sub-XX/dwi/
+#   derivatives/mrtrix/sub-XX/dwi/
 #     sub-XX_model-DTI_param-FA_dti.nii.gz    (carte FA — référence géométrique)
 #     sub-XX_model-DTI_param-MD_dti.nii.gz
 #     sub-XX_model-DTI_param-AD_dti.nii.gz
 #     sub-XX_model-DTI_param-RD_dti.nii.gz
-#   results/tractseg/sub-XX/cerebellum/
+#   derivatives/tractseg/sub-XX/cerebellum/
 #     sub-XX_space-dwi_desc-deepceres_dseg.nii.gz   (atlas DeepCeres, labels 1-13/101-113)
 #     sub-XX_space-dwi_desc-deepceres-all_mask.nii.gz (masque binaire cérébelleux complet)
 #
@@ -64,9 +64,9 @@ fi
 # Valeurs par défaut
 # ---------------------------------------------------------------------------
 EXP_DIR="${HOME}/Exp/socosca"
-MRTRIX_RESULTS="${EXP_DIR}/results/mrtrix"
-TRACTSEG_RESULTS="${EXP_DIR}/results/tractseg"
-RESULTS_ROOT="${EXP_DIR}/results/scilpy"
+MRTRIX_RESULTS="${EXP_DIR}/derivatives/mrtrix"
+TRACTSEG_RESULTS="${EXP_DIR}/derivatives/tractseg"
+RESULTS_ROOT="${EXP_DIR}/derivatives/scilpy"
 CONDA_PREFIX="${HOME}/miniforge3"
 
 SKIP_EXISTING="${SKIP_EXISTING:-true}"

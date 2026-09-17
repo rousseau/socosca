@@ -14,7 +14,8 @@ set -euo pipefail
 
 SYNC_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
 PROJ_DIR="$(dirname "$SYNC_DIR")"
-CONF="${SYNC_DIR}/machines.conf"
+CONF="${SYNC_DIR}/machines.conf.local"
+[ -f "$CONF" ] || CONF="${SYNC_DIR}/machines.conf"
 
 TARGET_ID="${1:?Usage: pull_results.sh <machine_id> [pipeline]}"
 PIPELINE="${2:-}"   # optionnel : restreindre à un pipeline (mrtrix / siam / freesurfer / plots)
@@ -30,27 +31,27 @@ fi
 _HOST=$(echo "$line" | awk '{print $2}')
 _DIR=$(echo "$line"  | awk '{print $3}')
 
-LOCAL_RESULTS="${PROJ_DIR}/results"
+LOCAL_RESULTS="${PROJ_DIR}/derivatives"
 mkdir -p "$LOCAL_RESULTS"
 
 echo ""
-echo ">>> Pull depuis ${TARGET_ID} (${_HOST}:${_DIR}/results/)"
+echo ">>> Pull depuis ${TARGET_ID} (${_HOST}:${_DIR}/derivatives/)"
 
 if [ -n "$PIPELINE" ]; then
     # Rapatrier un seul pipeline
     mkdir -p "${LOCAL_RESULTS}/${PIPELINE}"
     rsync -avz --progress \
-        "${_HOST}:${_DIR}/results/${PIPELINE}/" \
+        "${_HOST}:${_DIR}/derivatives/${PIPELINE}/" \
         "${LOCAL_RESULTS}/${PIPELINE}/"
-    echo "    [OK] results/${PIPELINE}/"
+    echo "    [OK] derivatives/${PIPELINE}/"
 else
     # Tout rapatrier sauf les fichiers .mif volumineux (déjà convertis en NIfTI)
     rsync -avz --progress \
         --exclude '*.mif' \
         --exclude 'tmp/' \
-        "${_HOST}:${_DIR}/results/" \
+        "${_HOST}:${_DIR}/derivatives/" \
         "${LOCAL_RESULTS}/"
-    echo "    [OK] results/ (*.mif exclus)"
+    echo "    [OK] derivatives/ (*.mif exclus)"
 fi
 
 echo ""

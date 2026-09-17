@@ -2,7 +2,7 @@
 # =============================================================================
 # sync/push_code.sh
 # Synchronise scripts/ et config/ vers toutes les machines distantes.
-# Les données brutes (Data/) et les résultats (results/) ne sont PAS poussés.
+# Les données brutes (Data/) et les résultats (derivatives/) ne sont PAS poussés.
 #
 # Usage :
 #   bash sync/push_code.sh           # vers toutes les machines
@@ -13,7 +13,8 @@ set -euo pipefail
 
 SYNC_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
 PROJ_DIR="$(dirname "$SYNC_DIR")"
-CONF="${SYNC_DIR}/machines.conf"
+CONF="${SYNC_DIR}/machines.conf.local"
+[ -f "$CONF" ] || CONF="${SYNC_DIR}/machines.conf"
 TARGET="${1:-}"     # optionnel : restreindre à une machine
 
 [ -f "$CONF" ] || { echo "[ERR] ${CONF} introuvable" >&2; exit 1; }
@@ -37,7 +38,7 @@ while IFS= read -r line; do
     ssh "$_HOST" "mkdir -p '${_DIR}/scripts' '${_DIR}/config' '${_DIR}/sync'"
 
     rsync -avz --delete \
-        --exclude 'results/' \
+        --exclude 'derivatives/' \
         --exclude '__pycache__/' \
         --exclude '*.pyc' \
         --exclude '.git/' \

@@ -8,7 +8,7 @@
 #   ~/Data/Socosca/sub-XX/anat/T1.nii.gz
 #
 # Sorties (format BIDS derivatives) :
-#   ~/Exp/socosca/results/siam/sub-XX/anat/
+#   ~/Exp/socosca/derivatives/siam/sub-XX/anat/
 #     sub-XX_space-T1w_desc-siam_dseg.nii.gz   (segmentation 17 labels)
 #
 # Étiquettes SIAM (17 labels) :
@@ -86,7 +86,7 @@ fi
 # ---------------------------------------------------------------------------
 # Répertoires de sortie
 # ---------------------------------------------------------------------------
-RESULTS_ROOT="${EXP_DIR}/results/${PIPELINE}"
+RESULTS_ROOT="${EXP_DIR}/derivatives/${PIPELINE}"
 mkdir -p "$RESULTS_ROOT"
 
 # Vérifier que siam-pred est accessible

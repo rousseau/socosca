@@ -3,7 +3,7 @@
 03_qc_plots.py
 Génération des figures de contrôle qualité — Pipeline MRtrix3 / Socosca
 
-Figures générées par sujet (results/plots/sub-XX/) :
+Figures générées par sujet (derivatives/plots/sub-XX/) :
   01_noise_map.png        Carte de bruit (dwidenoise) + histogramme
   02_denoise_residual.png Résidu débruitage (b0 + quelques volumes DWI)
   03_brain_mask.png       Masque cerveau superposé au mean b0
@@ -13,7 +13,7 @@ Figures générées par sujet (results/plots/sub-XX/) :
   07_fod_amplitude.png    Amplitude l0 des FOD WM normalisés
   08_eddy_motion.png      Paramètres de mouvement estimés par eddy
 
-Figure récapitulative (results/plots/) :
+Figure récapitulative (derivatives/plots/) :
   summary_FA.png          Coupe axiale FA de chaque sujet (comparaison rapide)
 
 Usage :

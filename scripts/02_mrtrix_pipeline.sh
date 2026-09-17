@@ -2,14 +2,21 @@
 # =============================================================================
 # 02_mrtrix_pipeline.sh
 # Pipeline DWI complet — Projet Socosca
-# Dépendances : MRtrix3, FSL (topup/eddy), ANTs (dwibiascorrect)
+# Dépendances : MRtrix3, FSL (topup/eddy), ANTs (dwibiascorrect), rclone
 #
-# Données d'entrée par sujet (~/Data/Socosca/sub-XX/) :
-#   anat/T1.nii.gz
-#   dwi/dwi_b1000.nii[.gz]  + .bval / .bvec / .json
-#   dwi/dwi_b2000.nii[.gz]  + .bval / .bvec / .json
-#   dwi/dwi_AP.nii[.gz]     + .json   (b0 AP — pour topup)
-#   dwi/dwi_PA.nii[.gz]     + .json   (b0 PA — pour topup)
+# Données d'entrée par sujet (nommage BIDS, dans un répertoire de travail
+# local dédié <WORK_DIR>/sourcedata/sub-XX/, rapatrié depuis Garage) :
+#   anat/sub-XX_T1w.nii[.gz] + .json
+#   dwi/sub-XX_acq-b1000_dwi.nii[.gz] + .bval/.bvec/.json
+#   dwi/sub-XX_acq-b2000_dwi.nii[.gz] + .bval/.bvec/.json
+#   fmap/sub-XX_dir-AP_epi.nii[.gz] + .json   (b0 AP — pour topup)
+#   fmap/sub-XX_dir-PA_epi.nii[.gz] + .json   (b0 PA — pour topup)
+#
+# Flux Garage (S3, via rclone) :
+#   1. Pull  garage:.../sourcedata/sub-XX -> <WORK_DIR>/sourcedata/sub-XX
+#   2. Calculs locaux dans <WORK_DIR>/derivatives/mrtrix/sub-XX (+ plots/)
+#   3. Push  <WORK_DIR>/derivatives/{mrtrix,plots}/sub-XX -> garage:.../derivatives/...
+#   Voir --no-pull / --no-push / --work-dir / --clean-sourcedata ci-dessous.
 #
 # Étapes :
 #   0. Conversion NIfTI → MIF + concaténation multi-shell
@@ -27,16 +34,18 @@
 #  10. Tractographie iFOD2 (tckgen) + filtrage SIFT2 (tcksift2)
 #  QC. Figures de contrôle qualité (Python/matplotlib)
 #
-# Sorties (format BIDS derivatives) :
-#   ~/Exp/socosca/results/mrtrix/sub-XX/dwi/
-#   ~/Exp/socosca/results/mrtrix/sub-XX/anat/
-#   ~/Exp/socosca/results/mrtrix/sub-XX/tractography/
-#   ~/Exp/socosca/results/plots/sub-XX/
+# Sorties (format BIDS derivatives, en local sous <WORK_DIR>/derivatives/) :
+#   <WORK_DIR>/derivatives/mrtrix/sub-XX/dwi/
+#   <WORK_DIR>/derivatives/mrtrix/sub-XX/anat/
+#   <WORK_DIR>/derivatives/mrtrix/sub-XX/tractography/
+#   <WORK_DIR>/derivatives/plots/sub-XX/
 #
 # Usage :
 #   bash scripts/02_mrtrix_pipeline.sh [--sub sub-01] [--nthreads 8]
-#   bash scripts/02_mrtrix_pipeline.sh                       # tous les sujets
+#   bash scripts/02_mrtrix_pipeline.sh                       # tous les sujets (liste depuis Garage)
 #   bash scripts/02_mrtrix_pipeline.sh --sub sub-01          # un seul sujet
+#   bash scripts/02_mrtrix_pipeline.sh --no-push             # calcul local, sans repousser vers Garage
+#   bash scripts/02_mrtrix_pipeline.sh --no-pull --sub sub-01  # rejouer sur une copie locale déjà présente
 #   SKIP_EXISTING=false bash scripts/02_mrtrix_pipeline.sh   # tout recalculer
 # =============================================================================
 
@@ -62,14 +71,17 @@ fi
 # ---------------------------------------------------------------------------
 # Valeurs par défaut
 # ---------------------------------------------------------------------------
-DATA_DIR="${HOME}/Data/Socosca"
-EXP_DIR="${HOME}/Exp/socosca"
+WORK_DIR="${SOCOSCA_WORK_DIR:-${HOME}/socosca-work}"
+DATA_DIR="${WORK_DIR}/sourcedata"
 PIPELINE="mrtrix"
 
 SKIP_EXISTING="${SKIP_EXISTING:-true}"
 NTHR="${NTHR_DEFAULT}"
 SUBJECT_ARG=""
 UPSAMPLE_VOX="${UPSAMPLE_VOX:-1.25}"
+DO_PULL=true
+DO_PUSH=true
+CLEAN_SOURCEDATA=false
 
 # Tractographie
 N_STREAMLINES=10000000
@@ -79,30 +91,46 @@ N_STREAMLINES_SIFT2=2000000
 # Parsing des arguments
 # ---------------------------------------------------------------------------
 usage() {
-    echo "Usage: $(basename "$0") [--sub <id>] [--nthreads <n>] [--force]"
-    echo "  --sub       traiter un seul sujet (ex: sub-01)"
-    echo "  --nthreads  nombre de threads (défaut: ${NTHR})"
-    echo "  --force     relancer tous les calculs même si les résultats existent"
+    cat <<EOF
+Usage: $(basename "$0") [--sub <id>] [--nthreads <n>] [--force] [options]
+
+  --sub               traiter un seul sujet (ex: sub-01)
+  --nthreads          nombre de threads (défaut: ${NTHR})
+  --force             relancer tous les calculs même si les résultats existent
+  --work-dir <dir>    répertoire de travail local (défaut: ${WORK_DIR})
+  --no-pull           ne pas rapatrier sourcedata depuis Garage (copie locale existante requise)
+  --no-push           ne pas repousser les dérivés vers Garage (calcul local uniquement)
+  --clean-sourcedata  supprimer la copie locale de sourcedata une fois le sujet traité
+EOF
     exit 0
 }
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        --sub)          SUBJECT_ARG="$2"; shift 2 ;;
-        --nthreads)     NTHR="$2";        shift 2 ;;
-        --force)        SKIP_EXISTING="false"; shift ;;
-        --upsample-vox) UPSAMPLE_VOX="$2"; shift 2 ;;
-        --help|-h)      usage ;;
+        --sub)              SUBJECT_ARG="$2"; shift 2 ;;
+        --nthreads)         NTHR="$2";        shift 2 ;;
+        --force)            SKIP_EXISTING="false"; shift ;;
+        --upsample-vox)     UPSAMPLE_VOX="$2"; shift 2 ;;
+        --work-dir)         WORK_DIR="$2"; DATA_DIR="${WORK_DIR}/sourcedata"; shift 2 ;;
+        --no-pull)          DO_PULL=false; shift ;;
+        --no-push)          DO_PUSH=false; shift ;;
+        --clean-sourcedata) CLEAN_SOURCEDATA=true; shift ;;
+        --help|-h)          usage ;;
         *)            echo "Argument inconnu : $1"; exit 1 ;;
     esac
 done
 
+if { [ "$DO_PULL" = true ] || [ "$DO_PUSH" = true ]; } && ! command -v rclone >/dev/null 2>&1; then
+    echo "[ERR] rclone introuvable — installer rclone, ou utiliser --no-pull --no-push pour un test purement local" >&2
+    exit 1
+fi
+
 # ---------------------------------------------------------------------------
 # Répertoires de sortie
 # ---------------------------------------------------------------------------
-RESULTS_ROOT="${EXP_DIR}/results/${PIPELINE}"
-PLOTS_ROOT="${EXP_DIR}/results/plots"
-mkdir -p "$RESULTS_ROOT" "$PLOTS_ROOT"
+RESULTS_ROOT="${WORK_DIR}/derivatives/${PIPELINE}"
+PLOTS_ROOT="${WORK_DIR}/derivatives/plots"
+mkdir -p "$DATA_DIR" "$RESULTS_ROOT" "$PLOTS_ROOT"
 
 # ---------------------------------------------------------------------------
 # Fonctions utilitaires
@@ -161,13 +189,19 @@ except Exception:
 # ---------------------------------------------------------------------------
 if [ -n "$SUBJECT_ARG" ]; then
     SUBJECTS=("$SUBJECT_ARG")
+elif [ "$DO_PULL" = true ]; then
+    SUBJECTS=()
+    while IFS= read -r _s; do SUBJECTS+=("${_s%/}"); done < <(
+        rclone lsf "${GARAGE_REMOTE}:${GARAGE_BUCKET}/${GARAGE_PREFIX}/sourcedata" --dirs-only 2>/dev/null | grep '^sub-' | sort)
+    [ ${#SUBJECTS[@]} -eq 0 ] && die "Aucun sujet trouvé sur Garage (${GARAGE_BUCKET}/${GARAGE_PREFIX}/sourcedata) — vérifier rclone/le remote, ou utiliser --sub"
 else
     SUBJECTS=()
     while IFS= read -r _s; do SUBJECTS+=("$_s"); done < <(
-        find "$DATA_DIR" -maxdepth 1 -type d -name "sub-*" | sort | xargs -I{} basename {})
+        find "$DATA_DIR" -maxdepth 1 -type d -name "sub-*" 2>/dev/null | sort | xargs -I{} basename {})
+    [ ${#SUBJECTS[@]} -eq 0 ] && die "Aucun sujet trouvé localement dans ${DATA_DIR} (--no-pull requiert une copie locale déjà présente)"
 fi
 
-log "Pipeline ${PIPELINE} — ${#SUBJECTS[@]} sujet(s) | threads=${NTHR} | skip_existing=${SKIP_EXISTING}"
+log "Pipeline ${PIPELINE} — ${#SUBJECTS[@]} sujet(s) | threads=${NTHR} | skip_existing=${SKIP_EXISTING} | work_dir=${WORK_DIR} | pull=${DO_PULL} | push=${DO_PUSH}"
 
 # ===========================================================================
 # BOUCLE PAR SUJET
@@ -175,7 +209,15 @@ log "Pipeline ${PIPELINE} — ${#SUBJECTS[@]} sujet(s) | threads=${NTHR} | skip_
 for SUBJECT_ID in "${SUBJECTS[@]}"; do
 
     SUBJECT="${DATA_DIR}/${SUBJECT_ID}"
-    [ -d "$SUBJECT" ] || { warn "Répertoire $SUBJECT introuvable — sujet ignoré"; continue; }
+
+    if [ "$DO_PULL" = true ]; then
+        log "Pull sourcedata Garage -> local (${SUBJECT_ID})"
+        mkdir -p "$SUBJECT"
+        rclone copy "${GARAGE_REMOTE}:${GARAGE_BUCKET}/${GARAGE_PREFIX}/sourcedata/${SUBJECT_ID}" "$SUBJECT" \
+            --exclude ".DS_Store" --quiet
+    fi
+
+    [ -d "$SUBJECT" ] || { warn "Répertoire $SUBJECT introuvable — sujet ignoré (pull échoué ou sujet absent)"; continue; }
 
     # ------------------------------------------------------------------
     # Répertoires BIDS derivatives
@@ -245,24 +287,34 @@ for SUBJECT_ID in "${SUBJECTS[@]}"; do
     log "========================================================"
 
     # ------------------------------------------------------------------
-    # Chemins des données brutes
+    # Chemins des données brutes (nommage BIDS)
     # ------------------------------------------------------------------
     ANAT_DIR="${SUBJECT}/anat"
     DWI_DIR="${SUBJECT}/dwi"
-    T1="${ANAT_DIR}/T1.nii.gz"
+    FMAP_DIR="${SUBJECT}/fmap"
+    T1=$(ls "${ANAT_DIR}/${BIDS}_T1w.nii.gz" "${ANAT_DIR}/${BIDS}_T1w.nii" 2>/dev/null | head -1 || true)
 
-    DWI_B1000=$(ls "${DWI_DIR}/dwi_b1000.nii.gz" "${DWI_DIR}/dwi_b1000.nii" 2>/dev/null | head -1 || true)
-    DWI_B2000=$(ls "${DWI_DIR}/dwi_b2000.nii.gz" "${DWI_DIR}/dwi_b2000.nii" 2>/dev/null | head -1 || true)
-    DWI_AP=$(ls    "${DWI_DIR}/dwi_AP.nii.gz"    "${DWI_DIR}/dwi_AP.nii"    2>/dev/null | head -1 || true)
-    DWI_PA=$(ls    "${DWI_DIR}/dwi_PA.nii.gz"    "${DWI_DIR}/dwi_PA.nii"    2>/dev/null | head -1 || true)
+    DWI_B1000=$(ls "${DWI_DIR}/${BIDS}_acq-b1000_dwi.nii.gz" "${DWI_DIR}/${BIDS}_acq-b1000_dwi.nii" 2>/dev/null | head -1 || true)
+    DWI_B2000=$(ls "${DWI_DIR}/${BIDS}_acq-b2000_dwi.nii.gz" "${DWI_DIR}/${BIDS}_acq-b2000_dwi.nii" 2>/dev/null | head -1 || true)
+    DWI_AP=$(ls    "${FMAP_DIR}/${BIDS}_dir-AP_epi.nii.gz"   "${FMAP_DIR}/${BIDS}_dir-AP_epi.nii"    2>/dev/null | head -1 || true)
+    DWI_PA=$(ls    "${FMAP_DIR}/${BIDS}_dir-PA_epi.nii.gz"   "${FMAP_DIR}/${BIDS}_dir-PA_epi.nii"    2>/dev/null | head -1 || true)
 
-    [ -f "$T1" ]        || die "$SUBJECT_ID : T1 introuvable"
-    [ -f "$DWI_B1000" ] || die "$SUBJECT_ID : DWI b1000 introuvable"
-    [ -f "$DWI_B2000" ] || die "$SUBJECT_ID : DWI b2000 introuvable"
-    [ -f "$DWI_AP" ]    || die "$SUBJECT_ID : b0 AP introuvable"
-    [ -f "$DWI_PA" ]    || die "$SUBJECT_ID : b0 PA introuvable"
+    DWI_B1000_BVEC="${DWI_DIR}/${BIDS}_acq-b1000_dwi.bvec"
+    DWI_B1000_BVAL="${DWI_DIR}/${BIDS}_acq-b1000_dwi.bval"
+    DWI_B1000_JSON="${DWI_DIR}/${BIDS}_acq-b1000_dwi.json"
+    DWI_B2000_BVEC="${DWI_DIR}/${BIDS}_acq-b2000_dwi.bvec"
+    DWI_B2000_BVAL="${DWI_DIR}/${BIDS}_acq-b2000_dwi.bval"
+    DWI_B2000_JSON="${DWI_DIR}/${BIDS}_acq-b2000_dwi.json"
+    DWI_AP_JSON="${FMAP_DIR}/${BIDS}_dir-AP_epi.json"
+    DWI_PA_JSON="${FMAP_DIR}/${BIDS}_dir-PA_epi.json"
 
-    READOUT_TIME=$(get_readout_time "${DWI_DIR}/dwi_AP.json")
+    { [ -n "$T1" ] && [ -f "$T1" ]; }  || die "$SUBJECT_ID : T1w introuvable (anat/${BIDS}_T1w.nii[.gz])"
+    [ -n "$DWI_B1000" ]                || die "$SUBJECT_ID : DWI acq-b1000 introuvable"
+    [ -n "$DWI_B2000" ]                || die "$SUBJECT_ID : DWI acq-b2000 introuvable"
+    [ -n "$DWI_AP" ]                   || die "$SUBJECT_ID : fmap dir-AP introuvable"
+    [ -n "$DWI_PA" ]                   || die "$SUBJECT_ID : fmap dir-PA introuvable"
+
+    READOUT_TIME=$(get_readout_time "$DWI_AP_JSON")
     info "TotalReadoutTime : ${READOUT_TIME}s"
 
     # ------------------------------------------------------------------
@@ -279,13 +331,13 @@ for SUBJECT_ID in "${SUBJECTS[@]}"; do
         MIF_B2000="${TMP}/${BIDS}_dwi_b2000.mif"
 
         mrconvert "$DWI_B1000" "$MIF_B1000" \
-            -fslgrad "${DWI_DIR}/dwi_b1000.bvec" "${DWI_DIR}/dwi_b1000.bval" \
-            -json_import "${DWI_DIR}/dwi_b1000.json" \
+            -fslgrad "$DWI_B1000_BVEC" "$DWI_B1000_BVAL" \
+            -json_import "$DWI_B1000_JSON" \
             -nthreads "$NTHR" -force -quiet
 
         mrconvert "$DWI_B2000" "$MIF_B2000" \
-            -fslgrad "${DWI_DIR}/dwi_b2000.bvec" "${DWI_DIR}/dwi_b2000.bval" \
-            -json_import "${DWI_DIR}/dwi_b2000.json" \
+            -fslgrad "$DWI_B2000_BVEC" "$DWI_B2000_BVAL" \
+            -json_import "$DWI_B2000_JSON" \
             -nthreads "$NTHR" -force -quiet
 
         mrcat "$MIF_B1000" "$MIF_B2000" "$MIF_CONCAT" \
@@ -298,10 +350,10 @@ for SUBJECT_ID in "${SUBJECTS[@]}"; do
         # Les fichiers AP/PA sont des acquisitions b0 pures (pas de table de
         # gradients) → mrconvert direct, pas de dwiextract -bzero
         mrconvert "$DWI_AP" "$MIF_AP" \
-            -json_import "${DWI_DIR}/dwi_AP.json" \
+            -json_import "$DWI_AP_JSON" \
             -nthreads "$NTHR" -force -quiet
         mrconvert "$DWI_PA" "$MIF_PA" \
-            -json_import "${DWI_DIR}/dwi_PA.json" \
+            -json_import "$DWI_PA_JSON" \
             -nthreads "$NTHR" -force -quiet
 
         # Concaténation directe AP + PA (déjà des b0)
@@ -608,7 +660,7 @@ for SUBJECT_ID in "${SUBJECTS[@]}"; do
     # ------------------------------------------------------------------
     log "[QC] Génération des figures de contrôle qualité"
 
-    python3 "${EXP_DIR}/scripts/03_qc_plots.py" \
+    python3 "${SCRIPT_DIR}/03_qc_plots.py" \
         --subject   "$SUBJECT_ID" \
         --out_dwi   "$OUT_DWI" \
         --out_plots "$OUT_PLOTS" \
@@ -627,6 +679,22 @@ for SUBJECT_ID in "${SUBJECTS[@]}"; do
 
     log ">>> Sujet ${SUBJECT_ID} terminé — Résultats : ${RESULTS_ROOT}/${SUBJECT_ID}"
 
+    if [ "$DO_PUSH" = true ]; then
+        log "Push derivatives -> Garage (${SUBJECT_ID})"
+        rclone copy "${RESULTS_ROOT}/${SUBJECT_ID}" \
+            "${GARAGE_REMOTE}:${GARAGE_BUCKET}/${GARAGE_PREFIX}/derivatives/${PIPELINE}/${SUBJECT_ID}" \
+            --exclude "*.mif" --exclude "tmp/**" --quiet
+        rclone copy "$OUT_PLOTS" \
+            "${GARAGE_REMOTE}:${GARAGE_BUCKET}/${GARAGE_PREFIX}/derivatives/plots/${SUBJECT_ID}" \
+            --quiet
+        info "Poussé vers Garage : derivatives/${PIPELINE}/${SUBJECT_ID} et derivatives/plots/${SUBJECT_ID}"
+    fi
+
+    if [ "$CLEAN_SOURCEDATA" = true ]; then
+        rm -rf "$SUBJECT"
+        info "Sourcedata locale supprimée : ${SUBJECT}"
+    fi
+
 done
 
 # ===========================================================================
@@ -634,7 +702,7 @@ done
 # ===========================================================================
 log "Génération du récapitulatif QC multi-sujets"
 
-python3 "${EXP_DIR}/scripts/03_qc_plots.py" \
+python3 "${SCRIPT_DIR}/03_qc_plots.py" \
     --summary \
     --results_root "$RESULTS_ROOT" \
     --out_plots    "$PLOTS_ROOT" \

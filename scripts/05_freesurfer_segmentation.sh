@@ -8,7 +8,7 @@
 #   ~/Data/Socosca/sub-XX/anat/T1.nii.gz
 #
 # Sorties (format BIDS derivatives) :
-#   ~/Exp/socosca/results/freesurfer/sub-XX/anat/
+#   ~/Exp/socosca/derivatives/freesurfer/sub-XX/anat/
 #     sub-XX_space-T1w_desc-brain_T1w.nii.gz      (cerveau extrait)
 #     sub-XX_space-T1w_desc-aseg_dseg.nii.gz       (segmentation sous-corticale aseg)
 #     sub-XX_space-T1w_desc-aparc+aseg_dseg.nii.gz (segmentation corticale parcellisée)
@@ -71,10 +71,10 @@ NTHR="${NTHR_DEFAULT}"
 SUBJECT_ARG=""
 
 # Subjects_dir FreeSurfer (dossier natif recon-all)
-FS_SUBJECTS_DIR="${EXP_DIR}/results/${PIPELINE}/subjects"
+FS_SUBJECTS_DIR="${EXP_DIR}/derivatives/${PIPELINE}/subjects"
 
 # Dossier BIDS derivatives
-RESULTS_ROOT="${EXP_DIR}/results/${PIPELINE}"
+RESULTS_ROOT="${EXP_DIR}/derivatives/${PIPELINE}"
 
 # ---------------------------------------------------------------------------
 # Parsing des arguments

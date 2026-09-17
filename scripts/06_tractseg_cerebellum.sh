@@ -5,12 +5,12 @@
 # Dépendances : TractSeg (installé localement), MRtrix3, FSL
 #
 # Données d'entrée (issues de 02_mrtrix_pipeline.sh) :
-#   results/mrtrix/sub-XX/dwi/
+#   derivatives/mrtrix/sub-XX/dwi/
 #     sub-XX_desc-msmtNorm_model-CSD_wm.mif   (FOD WM normalisé)
 #     sub-XX_model-DTI_param-FA_dti.nii.gz     (FA — pour recalage MNI)
 #     sub-XX_space-dwi_desc-brain_mask.nii.gz  (masque cerveau)
 #   ~/Data/Socosca/sub-XX/anat/T1.nii.gz       (T1 brut — pour recalage DeepCeres)
-#   results/deepceres/sub-XX/
+#   derivatives/deepceres/sub-XX/
 #     native_structures_*.nii.gz               (atlas lobulaire DeepCeres, espace T1)
 #     native_mask_*.nii.gz                     (masque cérébelleux DeepCeres, espace T1)
 #
@@ -37,7 +37,7 @@
 #   DeepCeres native_structures (tous labels > 0) recalé T1→MNI via ANTs
 #
 # Sorties :
-#   results/tractseg/sub-XX/
+#   derivatives/tractseg/sub-XX/
 #     peaks/         peaks CSD en espace DWI et MNI
 #     registration/  matrices de transformation DWI↔MNI
 #     tractseg/      sorties brutes TractSeg (segmentations, TOM)
@@ -71,8 +71,8 @@ fi
 # ---------------------------------------------------------------------------
 DATA_DIR="${HOME}/Data/Socosca"
 EXP_DIR="${HOME}/Exp/socosca"
-MRTRIX_RESULTS="${EXP_DIR}/results/mrtrix"
-RESULTS_ROOT="${EXP_DIR}/results/tractseg"
+MRTRIX_RESULTS="${EXP_DIR}/derivatives/mrtrix"
+RESULTS_ROOT="${EXP_DIR}/derivatives/tractseg"
 
 SKIP_EXISTING="${SKIP_EXISTING:-true}"
 NTHR="${NTHR_DEFAULT}"
@@ -86,7 +86,7 @@ CEREB_BUNDLES="ICP_left,ICP_right,MCP,SCP_left,SCP_right,FPT_left,FPT_right"
 QC_BUNDLES="CST_left,CST_right,AF_left,AF_right"
 
 # Segmentation cérébelleuse DeepCeres
-DEEPCERES_RESULTS="${EXP_DIR}/results/deepceres"
+DEEPCERES_RESULTS="${EXP_DIR}/derivatives/deepceres"
 
 # ---------------------------------------------------------------------------
 # Parsing des arguments

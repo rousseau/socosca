@@ -55,4 +55,8 @@ fi
 # shellcheck disable=SC1090
 source "$_PROFILE_FILE"
 
+# Config Garage (S3) — commune aux 3 machines, ne dépend pas du profil
+# shellcheck disable=SC1091
+source "${_CONFIG_DIR}/garage.sh"
+
 echo "  [config] machine=${MACHINE_ID} | threads=${NTHR_DEFAULT} | siam=${SIAM_AVAILABLE}"
