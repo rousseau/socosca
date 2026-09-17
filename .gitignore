@@ -2,3 +2,4 @@ derivatives/
 __pycache__/
 *.pyc
 .DS_Store
+sync/machines.conf.local
