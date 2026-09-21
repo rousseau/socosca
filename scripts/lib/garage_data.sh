@@ -43,17 +43,21 @@ select_subjects() {
     if [ "${DO_PULL}" = true ]; then
         while IFS= read -r _s; do SUBJECTS+=("${_s%/}"); done < <(
             rclone lsf "${GARAGE_REMOTE}:${GARAGE_BUCKET}/${GARAGE_PREFIX}/sourcedata" --dirs-only 2>/dev/null | grep '^sub-' | sort)
-        [ ${#SUBJECTS[@]} -eq 0 ] && {
+        # "if" (pas "test && { ...; }") : sous set -e, le statut de sortie du
+        # test false serait celui de la dernière commande de la fonction, donc
+        # celui de select_subjects — et tuerait le script juste après l'appel,
+        # y compris quand des sujets ONT été trouvés (cas normal).
+        if [ ${#SUBJECTS[@]} -eq 0 ]; then
             echo "[ERR] Aucun sujet trouvé sur Garage (${GARAGE_BUCKET}/${GARAGE_PREFIX}/sourcedata) — vérifier rclone/le remote, ou utiliser --sub" >&2
             exit 1
-        }
+        fi
     else
         while IFS= read -r _s; do SUBJECTS+=("$_s"); done < <(
             find "$DATA_DIR" -maxdepth 1 -type d -name "sub-*" 2>/dev/null | sort | xargs -I{} basename {})
-        [ ${#SUBJECTS[@]} -eq 0 ] && {
+        if [ ${#SUBJECTS[@]} -eq 0 ]; then
             echo "[ERR] Aucun sujet trouvé localement dans ${DATA_DIR} (--no-pull requiert une copie locale déjà présente)" >&2
             exit 1
-        }
+        fi
     fi
 }
 
