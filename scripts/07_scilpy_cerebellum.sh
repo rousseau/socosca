@@ -63,10 +63,13 @@ fi
 # ---------------------------------------------------------------------------
 # Valeurs par défaut
 # ---------------------------------------------------------------------------
-EXP_DIR="${HOME}/Exp/socosca"
-MRTRIX_RESULTS="${EXP_DIR}/derivatives/mrtrix"
-TRACTSEG_RESULTS="${EXP_DIR}/derivatives/tractseg"
-RESULTS_ROOT="${EXP_DIR}/derivatives/scilpy"
+# Même WORK_DIR que 02_mrtrix_pipeline.sh / 06_tractseg_cerebellum.sh : ce
+# script lit leurs dérivés en local (mrtrix produit des .mif jamais poussés
+# vers Garage — voir la note "IMPORTANT" en tête de 06_tractseg_cerebellum.sh).
+WORK_DIR="${SOCOSCA_WORK_DIR:-${HOME}/socosca-work}"
+MRTRIX_RESULTS="${WORK_DIR}/derivatives/mrtrix"
+TRACTSEG_RESULTS="${WORK_DIR}/derivatives/tractseg"
+RESULTS_ROOT="${WORK_DIR}/derivatives/scilpy"
 CONDA_PREFIX="${HOME}/miniforge3"
 
 SKIP_EXISTING="${SKIP_EXISTING:-true}"
@@ -81,19 +84,26 @@ LOBULE_NAMS=("LobI-II" "LobIII" "LobIV" "LobV" "LobVI" "CrusI" "CrusII" "LobVIIB
 # ---------------------------------------------------------------------------
 usage() {
     cat <<EOF
-Usage: $(basename "$0") [--sub <id>] [--force] [--help]
+Usage: $(basename "$0") [--sub <id>] [--force] [--work-dir <dir>] [--help]
 
-  --sub       traiter un seul sujet (ex: sub-01)
-  --force     relancer tous les calculs même si les résultats existent
-  --help      afficher cette aide
+  --sub               traiter un seul sujet (ex: sub-01)
+  --force             relancer tous les calculs même si les résultats existent
+  --work-dir <dir>    répertoire de travail local (défaut: ${WORK_DIR})
+                      — DOIT être le même que 02_mrtrix_pipeline.sh / 06_tractseg_cerebellum.sh
+  --help              afficher cette aide
 EOF
     exit 0
 }
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        --sub)    SUBJECT_ARG="$2"; shift 2 ;;
-        --force)  SKIP_EXISTING="false"; shift ;;
+        --sub)       SUBJECT_ARG="$2"; shift 2 ;;
+        --force)     SKIP_EXISTING="false"; shift ;;
+        --work-dir)  WORK_DIR="$2"
+                     MRTRIX_RESULTS="${WORK_DIR}/derivatives/mrtrix"
+                     TRACTSEG_RESULTS="${WORK_DIR}/derivatives/tractseg"
+                     RESULTS_ROOT="${WORK_DIR}/derivatives/scilpy"
+                     shift 2 ;;
         --help|-h) usage ;;
         *) echo "Argument inconnu : $1"; exit 1 ;;
     esac

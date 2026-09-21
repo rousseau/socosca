@@ -4,13 +4,30 @@
 # Tractographie bundle-spécifique (TractSeg) centrée sur le cervelet
 # Dépendances : TractSeg (installé localement), MRtrix3, FSL
 #
-# Données d'entrée (issues de 02_mrtrix_pipeline.sh) :
-#   derivatives/mrtrix/sub-XX/dwi/
+# Flux Garage (S3, via rclone) — mécanisme commun, voir scripts/lib/garage_data.sh :
+#   1. Pull  garage:.../sourcedata/sub-XX/anat -> <WORK_DIR>/sourcedata/sub-XX/anat
+#      (seul anat/ est nécessaire ici, pour le recalage DeepCeres)
+#   2. Calcul local dans <WORK_DIR>/derivatives/tractseg/sub-XX
+#   3. Push <WORK_DIR>/derivatives/tractseg/sub-XX -> garage:.../derivatives/tractseg/sub-XX
+#   Voir --no-pull / --no-push / --work-dir / --clean-sourcedata ci-dessous.
+#
+# IMPORTANT — dépendance mrtrix NON récupérable depuis Garage :
+#   02_mrtrix_pipeline.sh exclut délibérément les *.mif du push vers Garage
+#   (--exclude "*.mif", pour limiter le volume centralisé). Or ce script a
+#   besoin du FOD WM normalisé (.mif) pour l'extraction des pics (sh2peaks).
+#   -> Ce script doit donc tourner sur la MÊME machine et le MÊME WORK_DIR
+#      que 02_mrtrix_pipeline.sh (juste après, avant tout --clean-sourcedata/
+#      nettoyage manuel), et lit directement <WORK_DIR>/derivatives/mrtrix/
+#      en local. Il ne tente pas de le pull depuis Garage.
+#
+# Données d'entrée (issues de 02_mrtrix_pipeline.sh, même WORK_DIR) :
+#   <WORK_DIR>/derivatives/mrtrix/sub-XX/dwi/
 #     sub-XX_desc-msmtNorm_model-CSD_wm.mif   (FOD WM normalisé)
 #     sub-XX_model-DTI_param-FA_dti.nii.gz     (FA — pour recalage MNI)
 #     sub-XX_space-dwi_desc-brain_mask.nii.gz  (masque cerveau)
-#   ~/Data/Socosca/sub-XX/anat/T1.nii.gz       (T1 brut — pour recalage DeepCeres)
-#   derivatives/deepceres/sub-XX/
+#   <WORK_DIR>/sourcedata/sub-XX/anat/sub-XX_T1w.nii[.gz]  (T1 brut — recalage DeepCeres)
+#   <WORK_DIR>/derivatives/deepceres/sub-XX/   (outil externe, hors Garage —
+#     à déposer manuellement dans le WORK_DIR de cette machine)
 #     native_structures_*.nii.gz               (atlas lobulaire DeepCeres, espace T1)
 #     native_mask_*.nii.gz                     (masque cérébelleux DeepCeres, espace T1)
 #
@@ -48,16 +65,19 @@
 # Usage :
 #   bash scripts/06_tractseg_cerebellum.sh [--sub sub-01] [--nthreads 8]
 #   bash scripts/06_tractseg_cerebellum.sh --force   # tout recalculer
+#   bash scripts/06_tractseg_cerebellum.sh --no-push # calcul local, sans repousser vers Garage
 # =============================================================================
 
 set -euo pipefail
 
 # ---------------------------------------------------------------------------
-# Config machine
+# Config machine + mécanisme commun d'accès Garage
 # ---------------------------------------------------------------------------
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
 # shellcheck disable=SC1091
 source "${SCRIPT_DIR}/../config/machine.sh"
+# shellcheck disable=SC1091
+source "${SCRIPT_DIR}/lib/garage_data.sh"
 
 if [ -f "${FSLDIR}/etc/fslconf/fsl.sh" ]; then
     set +eu
@@ -69,14 +89,20 @@ fi
 # ---------------------------------------------------------------------------
 # Valeurs par défaut
 # ---------------------------------------------------------------------------
-DATA_DIR="${HOME}/Data/Socosca"
-EXP_DIR="${HOME}/Exp/socosca"
-MRTRIX_RESULTS="${EXP_DIR}/derivatives/mrtrix"
-RESULTS_ROOT="${EXP_DIR}/derivatives/tractseg"
+WORK_DIR="${SOCOSCA_WORK_DIR:-${HOME}/socosca-work}"
+DATA_DIR="${WORK_DIR}/sourcedata"
+PIPELINE="tractseg"
+# Dérivés mrtrix : local uniquement, produits par 02 dans le MÊME work_dir
+# (voir note "IMPORTANT" en tête de fichier — jamais pull depuis Garage)
+MRTRIX_RESULTS="${WORK_DIR}/derivatives/mrtrix"
+RESULTS_ROOT="${WORK_DIR}/derivatives/${PIPELINE}"
 
 SKIP_EXISTING="${SKIP_EXISTING:-true}"
 NTHR="${NTHR_DEFAULT}"
 SUBJECT_ARG=""
+DO_PULL=true
+DO_PUSH=true
+CLEAN_SOURCEDATA=false
 
 # Bundles cérébelleux à traiter (séparés par des virgules pour TractSeg/Tracking)
 CEREB_BUNDLES="ICP_left,ICP_right,MCP,SCP_left,SCP_right,FPT_left,FPT_right"
@@ -85,20 +111,26 @@ CEREB_BUNDLES="ICP_left,ICP_right,MCP,SCP_left,SCP_right,FPT_left,FPT_right"
 # Bundles QC classiques (pour vérification qualité du pipeline)
 QC_BUNDLES="CST_left,CST_right,AF_left,AF_right"
 
-# Segmentation cérébelleuse DeepCeres
-DEEPCERES_RESULTS="${EXP_DIR}/derivatives/deepceres"
+# Segmentation cérébelleuse DeepCeres — outil externe, hors Garage (voir note
+# "IMPORTANT" en tête de fichier) : à déposer manuellement dans ce WORK_DIR
+DEEPCERES_RESULTS="${WORK_DIR}/derivatives/deepceres"
 
 # ---------------------------------------------------------------------------
 # Parsing des arguments
 # ---------------------------------------------------------------------------
 usage() {
     cat <<EOF
-Usage: $(basename "$0") [--sub <id>] [--nthreads <n>] [--force] [--help]
+Usage: $(basename "$0") [--sub <id>] [--nthreads <n>] [--force] [options]
 
-  --sub       traiter un seul sujet (ex: sub-01)
-  --nthreads  nombre de threads MRtrix3 (défaut: ${NTHR})
-  --force     relancer tous les calculs même si les résultats existent
-  --help      afficher cette aide
+  --sub               traiter un seul sujet (ex: sub-01)
+  --nthreads          nombre de threads MRtrix3 (défaut: ${NTHR})
+  --force             relancer tous les calculs même si les résultats existent
+  --work-dir <dir>    répertoire de travail local (défaut: ${WORK_DIR})
+                      — DOIT être le même que celui utilisé par 02_mrtrix_pipeline.sh
+  --no-pull           ne pas rapatrier sourcedata depuis Garage (copie locale existante requise)
+  --no-push           ne pas repousser les dérivés vers Garage (calcul local uniquement)
+  --clean-sourcedata  supprimer la copie locale de sourcedata une fois le sujet traité
+  --help              afficher cette aide
 
 Bundles traités : ${CEREB_BUNDLES}
 EOF
@@ -107,13 +139,23 @@ EOF
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        --sub)       SUBJECT_ARG="$2"; shift 2 ;;
-        --nthreads)  NTHR="$2";        shift 2 ;;
-        --force)     SKIP_EXISTING="false"; shift ;;
+        --sub)               SUBJECT_ARG="$2"; shift 2 ;;
+        --nthreads)          NTHR="$2";        shift 2 ;;
+        --force)             SKIP_EXISTING="false"; shift ;;
+        --work-dir)          WORK_DIR="$2"; DATA_DIR="${WORK_DIR}/sourcedata"
+                              MRTRIX_RESULTS="${WORK_DIR}/derivatives/mrtrix"
+                              RESULTS_ROOT="${WORK_DIR}/derivatives/${PIPELINE}"
+                              DEEPCERES_RESULTS="${WORK_DIR}/derivatives/deepceres"
+                              shift 2 ;;
+        --no-pull)           DO_PULL=false; shift ;;
+        --no-push)           DO_PUSH=false; shift ;;
+        --clean-sourcedata)  CLEAN_SOURCEDATA=true; shift ;;
         --help|-h)   usage ;;
         *)           echo "Argument inconnu : $1"; exit 1 ;;
     esac
 done
+
+require_rclone_if_needed
 
 # ---------------------------------------------------------------------------
 # Correctif macOS : conflit libomp + segfault PyTorch multiprocessing
@@ -205,17 +247,11 @@ assert_tck_space_matches_image() {
 }
 
 # ---------------------------------------------------------------------------
-# Sélection des sujets
+# Sélection des sujets (mécanisme commun — scripts/lib/garage_data.sh)
 # ---------------------------------------------------------------------------
-if [ -n "$SUBJECT_ARG" ]; then
-    SUBJECTS=("$SUBJECT_ARG")
-else
-    SUBJECTS=()
-    while IFS= read -r _s; do SUBJECTS+=("$_s"); done < <(
-        find "$DATA_DIR" -maxdepth 1 -type d -name "sub-*" | sort | xargs -I{} basename {})
-fi
+select_subjects
 
-log "Pipeline TractSeg cervelet — ${#SUBJECTS[@]} sujet(s) | threads=${NTHR} | skip_existing=${SKIP_EXISTING}"
+log "Pipeline TractSeg cervelet — ${#SUBJECTS[@]} sujet(s) | threads=${NTHR} | skip_existing=${SKIP_EXISTING} | work_dir=${WORK_DIR} | pull=${DO_PULL} | push=${DO_PUSH}"
 log "Bundles : ${CEREB_BUNDLES}"
 
 # ===========================================================================
@@ -228,14 +264,24 @@ for SUBJECT_ID in "${SUBJECTS[@]}"; do
     log "========================================================"
 
     # ------------------------------------------------------------------
-    # Entrées MRtrix
+    # Sourcedata (T1 brut, pour recalage DeepCeres) — depuis Garage
+    # ------------------------------------------------------------------
+    SUBJECT="${DATA_DIR}/${SUBJECT_ID}"
+
+    if [ "$DO_PULL" = true ]; then
+        log "Pull sourcedata Garage -> local (${SUBJECT_ID}, anat/ uniquement)"
+        pull_subject_sourcedata "$SUBJECT_ID" anat
+    fi
+
+    # ------------------------------------------------------------------
+    # Entrées MRtrix (local uniquement — voir note "IMPORTANT" en tête de fichier)
     # ------------------------------------------------------------------
     IN_DWI="${MRTRIX_RESULTS}/${SUBJECT_ID}/dwi"
     FOD_WM="${IN_DWI}/${SUBJECT_ID}_desc-msmtNorm_model-CSD_wm.mif"
     FA="${IN_DWI}/${SUBJECT_ID}_model-DTI_param-FA_dti.nii.gz"
     BRAIN_MASK="${IN_DWI}/${SUBJECT_ID}_space-dwi_desc-brain_mask.nii.gz"
 
-    [ -f "$FOD_WM" ]     || die "${SUBJECT_ID} : FOD WM normalisé introuvable (${FOD_WM})\n  → Lancer 02_mrtrix_pipeline.sh d'abord"
+    [ -f "$FOD_WM" ]     || die "${SUBJECT_ID} : FOD WM normalisé introuvable (${FOD_WM})\n  → Lancer 02_mrtrix_pipeline.sh d'abord, sur ce même --work-dir (${WORK_DIR})"
     [ -f "$FA" ]         || die "${SUBJECT_ID} : FA introuvable (${FA})"
     [ -f "$BRAIN_MASK" ] || die "${SUBJECT_ID} : masque cerveau introuvable (${BRAIN_MASK})"
 
@@ -245,11 +291,11 @@ for SUBJECT_ID in "${SUBJECTS[@]}"; do
     DEPC_DIR="${DEEPCERES_RESULTS}/${SUBJECT_ID}"
     DEPC_STRUCT_NAT=$(ls "${DEPC_DIR}"/native_structures_*.nii.gz 2>/dev/null | head -1 || true)
     DEPC_MASK_NAT=$(ls  "${DEPC_DIR}"/native_mask_*.nii.gz        2>/dev/null | head -1 || true)
-    T1_ORIG="${DATA_DIR}/${SUBJECT_ID}/anat/T1.nii.gz"
+    T1_ORIG=$(find_t1w "$SUBJECT" "$SUBJECT_ID")
 
     [ -n "$DEPC_STRUCT_NAT" ] || die "${SUBJECT_ID} : DeepCeres native_structures introuvable dans ${DEPC_DIR}"
     [ -n "$DEPC_MASK_NAT" ]   || die "${SUBJECT_ID} : DeepCeres native_mask introuvable dans ${DEPC_DIR}"
-    [ -f "$T1_ORIG" ]          || die "${SUBJECT_ID} : T1.nii.gz introuvable (${T1_ORIG})"
+    [ -n "$T1_ORIG" ]          || die "${SUBJECT_ID} : T1w introuvable (anat/${SUBJECT_ID}_T1w.nii[.gz])"
 
     # ------------------------------------------------------------------
     # Répertoires de sortie
@@ -880,6 +926,17 @@ print(int(nib.load('${LOB_MASK}').get_fdata().sum()))" 2>/dev/null || echo 0)
     fi  # fin mrview disponible
 
     log ">>> Sujet ${SUBJECT_ID} terminé — Résultats : ${OUT}"
+
+    if [ "$DO_PUSH" = true ]; then
+        log "Push derivatives -> Garage (${SUBJECT_ID})"
+        push_subject_results "$PIPELINE" "$SUBJECT_ID" "$OUT"
+        info "Poussé vers Garage : derivatives/${PIPELINE}/${SUBJECT_ID}"
+    fi
+
+    if [ "$CLEAN_SOURCEDATA" = true ]; then
+        clean_sourcedata "$SUBJECT_ID"
+        info "Sourcedata locale supprimée : ${SUBJECT}"
+    fi
 
 done
 

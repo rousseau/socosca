@@ -57,6 +57,8 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
 # shellcheck disable=SC1091
 source "${SCRIPT_DIR}/../config/machine.sh"
+# shellcheck disable=SC1091
+source "${SCRIPT_DIR}/lib/garage_data.sh"
 
 # FSL : FSLDIR est défini par machine.sh, sourcer fsl.sh
 # LD_LIBRARY_PATH pré-FSL sauvegardé pour restauration avant l'appel ANTs
@@ -125,10 +127,7 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-if { [ "$DO_PULL" = true ] || [ "$DO_PUSH" = true ]; } && ! command -v rclone >/dev/null 2>&1; then
-    echo "[ERR] rclone introuvable — installer rclone, ou utiliser --no-pull --no-push pour un test purement local" >&2
-    exit 1
-fi
+require_rclone_if_needed
 
 # ---------------------------------------------------------------------------
 # Répertoires de sortie
@@ -192,19 +191,7 @@ except Exception:
 # ---------------------------------------------------------------------------
 # Sélection des sujets
 # ---------------------------------------------------------------------------
-if [ -n "$SUBJECT_ARG" ]; then
-    SUBJECTS=("$SUBJECT_ARG")
-elif [ "$DO_PULL" = true ]; then
-    SUBJECTS=()
-    while IFS= read -r _s; do SUBJECTS+=("${_s%/}"); done < <(
-        rclone lsf "${GARAGE_REMOTE}:${GARAGE_BUCKET}/${GARAGE_PREFIX}/sourcedata" --dirs-only 2>/dev/null | grep '^sub-' | sort)
-    [ ${#SUBJECTS[@]} -eq 0 ] && die "Aucun sujet trouvé sur Garage (${GARAGE_BUCKET}/${GARAGE_PREFIX}/sourcedata) — vérifier rclone/le remote, ou utiliser --sub"
-else
-    SUBJECTS=()
-    while IFS= read -r _s; do SUBJECTS+=("$_s"); done < <(
-        find "$DATA_DIR" -maxdepth 1 -type d -name "sub-*" 2>/dev/null | sort | xargs -I{} basename {})
-    [ ${#SUBJECTS[@]} -eq 0 ] && die "Aucun sujet trouvé localement dans ${DATA_DIR} (--no-pull requiert une copie locale déjà présente)"
-fi
+select_subjects
 
 log "Pipeline ${PIPELINE} — ${#SUBJECTS[@]} sujet(s) | threads=${NTHR} | skip_existing=${SKIP_EXISTING} | work_dir=${WORK_DIR} | pull=${DO_PULL} | push=${DO_PUSH}"
 
@@ -217,9 +204,7 @@ for SUBJECT_ID in "${SUBJECTS[@]}"; do
 
     if [ "$DO_PULL" = true ]; then
         log "Pull sourcedata Garage -> local (${SUBJECT_ID})"
-        mkdir -p "$SUBJECT"
-        rclone copy "${GARAGE_REMOTE}:${GARAGE_BUCKET}/${GARAGE_PREFIX}/sourcedata/${SUBJECT_ID}" "$SUBJECT" \
-            --exclude ".DS_Store" --quiet
+        pull_subject_sourcedata "$SUBJECT_ID"
     fi
 
     [ -d "$SUBJECT" ] || { warn "Répertoire $SUBJECT introuvable — sujet ignoré (pull échoué ou sujet absent)"; continue; }
@@ -297,7 +282,7 @@ for SUBJECT_ID in "${SUBJECTS[@]}"; do
     ANAT_DIR="${SUBJECT}/anat"
     DWI_DIR="${SUBJECT}/dwi"
     FMAP_DIR="${SUBJECT}/fmap"
-    T1=$(ls "${ANAT_DIR}/${BIDS}_T1w.nii.gz" "${ANAT_DIR}/${BIDS}_T1w.nii" 2>/dev/null | head -1 || true)
+    T1=$(find_t1w "$SUBJECT" "$SUBJECT_ID")
 
     DWI_B1000=$(ls "${DWI_DIR}/${BIDS}_acq-b1000_dwi.nii.gz" "${DWI_DIR}/${BIDS}_acq-b1000_dwi.nii" 2>/dev/null | head -1 || true)
     DWI_B2000=$(ls "${DWI_DIR}/${BIDS}_acq-b2000_dwi.nii.gz" "${DWI_DIR}/${BIDS}_acq-b2000_dwi.nii" 2>/dev/null | head -1 || true)
@@ -688,17 +673,13 @@ for SUBJECT_ID in "${SUBJECTS[@]}"; do
 
     if [ "$DO_PUSH" = true ]; then
         log "Push derivatives -> Garage (${SUBJECT_ID})"
-        rclone copy "${RESULTS_ROOT}/${SUBJECT_ID}" \
-            "${GARAGE_REMOTE}:${GARAGE_BUCKET}/${GARAGE_PREFIX}/derivatives/${PIPELINE}/${SUBJECT_ID}" \
-            --exclude "*.mif" --exclude "tmp/**" --quiet
-        rclone copy "$OUT_PLOTS" \
-            "${GARAGE_REMOTE}:${GARAGE_BUCKET}/${GARAGE_PREFIX}/derivatives/plots/${SUBJECT_ID}" \
-            --quiet
+        push_subject_results "$PIPELINE" "$SUBJECT_ID" "${RESULTS_ROOT}/${SUBJECT_ID}" "*.mif" "tmp/**"
+        push_subject_results "plots" "$SUBJECT_ID" "$OUT_PLOTS"
         info "Poussé vers Garage : derivatives/${PIPELINE}/${SUBJECT_ID} et derivatives/plots/${SUBJECT_ID}"
     fi
 
     if [ "$CLEAN_SOURCEDATA" = true ]; then
-        rm -rf "$SUBJECT"
+        clean_sourcedata "$SUBJECT_ID"
         info "Sourcedata locale supprimée : ${SUBJECT}"
     fi
 
