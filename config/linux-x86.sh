@@ -6,9 +6,12 @@
 export MACHINE_ID="linux-x86"
 
 # ---------------------------------------------------------------------------
-# FreeSurfer
+# FreeSurfer — via Docker (freesurfer/freesurfer:8.2.0)
+# Pas de paquet .deb natif compatible Ubuntu 26.04 (ABI ITK/HDF5/VTK liées à
+# Ubuntu 24.04). FREESURFER_HOME pointe vers des wrappers qui appellent
+# `docker run` ; voir ~/freesurfer-docker/FreeSurferEnv.sh pour le détail.
 # ---------------------------------------------------------------------------
-export FREESURFER_HOME="${FREESURFER_HOME:-/usr/local/freesurfer/8.2.0}"
+export FREESURFER_HOME="${FREESURFER_HOME:-${HOME}/freesurfer-docker}"
 export FS_LICENSE="${FS_LICENSE:-${HOME}/.freesurfer_license.txt}"
 
 # ---------------------------------------------------------------------------

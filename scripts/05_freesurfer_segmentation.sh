@@ -184,6 +184,13 @@ morph_to_gifti() {
     if [ -f "$morph" ] && { [ "${SKIP_EXISTING}" = "false" ] || [ ! -f "$dst" ]; }; then
         mris_convert --annot "$morph" "$surf" "$dst" \
         || mris_convert -c "$morph" "$surf" "$dst"
+        # mris_convert écrit toujours sous <hémisphère>.<nom demandé> (préfixe
+        # lh./rh. de "$morph"), quel que soit le chemin donné en sortie —
+        # renommer vers le nom BIDS attendu.
+        local hemi_prefix mis_named
+        hemi_prefix="${morph##*/}"; hemi_prefix="${hemi_prefix%%.*}"
+        mis_named="$(dirname "$dst")/${hemi_prefix}.$(basename "$dst")"
+        [ -f "$mis_named" ] && mv "$mis_named" "$dst"
         info "$(basename "$morph") → $(basename "$dst")"
     fi
 }

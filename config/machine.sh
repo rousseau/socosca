@@ -87,4 +87,22 @@ else
     echo "           ANTS_BIN=/chemin/reel/bin bash scripts/02_mrtrix_pipeline.sh ..." >&2
 fi
 
+# Vérification FreeSurfer : erreur fréquente et cryptique (05_freesurfer_segmentation.sh
+# échoue au lancement) si FREESURFER_HOME/FS_LICENSE ne correspondent pas à
+# l'installation réelle sur cette machine (le défaut par profil est une supposition).
+if [ -n "${FREESURFER_HOME:-}" ] && [ ! -f "${FREESURFER_HOME}/FreeSurferEnv.sh" ]; then
+    echo "  [WARN] FreeSurferEnv.sh introuvable : ${FREESURFER_HOME}/FreeSurferEnv.sh" >&2
+    echo "         FREESURFER_HOME semble incorrect pour cette machine (profil ${_PROFILE})." >&2
+    echo "         Localiser l'installation FreeSurfer réelle :  find / -iname FreeSurferEnv.sh 2>/dev/null" >&2
+    echo "         Puis corriger FREESURFER_HOME dans config/${_PROFILE}.sh, ou l'exporter avant l'appel :" >&2
+    echo "           FREESURFER_HOME=/chemin/reel bash scripts/05_freesurfer_segmentation.sh ..." >&2
+fi
+
+if [ -n "${FS_LICENSE:-}" ] && [ ! -r "${FS_LICENSE}" ]; then
+    echo "  [WARN] Licence FreeSurfer introuvable ou illisible : ${FS_LICENSE}" >&2
+    echo "         Requis par scripts/05_freesurfer_segmentation.sh (recon-all)." >&2
+    echo "         Corriger FS_LICENSE dans config/${_PROFILE}.sh, ou l'exporter avant l'appel :" >&2
+    echo "           FS_LICENSE=/chemin/reel/license.txt bash scripts/05_freesurfer_segmentation.sh ..." >&2
+fi
+
 echo "  [config] machine=${MACHINE_ID} | threads=${NTHR_DEFAULT} | siam=${SIAM_AVAILABLE}"

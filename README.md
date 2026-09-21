@@ -95,6 +95,8 @@ seul sujet. Voir `bash scripts/02_mrtrix_pipeline.sh --help`.
 - MRtrix3
 - FSL (topup, eddy)
 - ANTs
+- FreeSurfer (segmentation, `05_freesurfer_segmentation.sh`) — sur linux-x86, tourne
+  via Docker (`freesurfer/freesurfer:8.2.0`), voir `config/linux-x86.sh`
 - rclone (rapatriement/publication des données par le pipeline)
 - Python 3 + matplotlib (QC)
 

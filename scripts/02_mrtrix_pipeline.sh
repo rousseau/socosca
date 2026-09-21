@@ -298,11 +298,17 @@ for SUBJECT_ID in "${SUBJECTS[@]}"; do
     DWI_AP_JSON="${FMAP_DIR}/${BIDS}_dir-AP_epi.json"
     DWI_PA_JSON="${FMAP_DIR}/${BIDS}_dir-PA_epi.json"
 
-    { [ -n "$T1" ] && [ -f "$T1" ]; }  || die "$SUBJECT_ID : T1w introuvable (anat/${BIDS}_T1w.nii[.gz])"
-    [ -n "$DWI_B1000" ]                || die "$SUBJECT_ID : DWI acq-b1000 introuvable"
-    [ -n "$DWI_B2000" ]                || die "$SUBJECT_ID : DWI acq-b2000 introuvable"
-    [ -n "$DWI_AP" ]                   || die "$SUBJECT_ID : fmap dir-AP introuvable"
-    [ -n "$DWI_PA" ]                   || die "$SUBJECT_ID : fmap dir-PA introuvable"
+    MISSING_RAW=""
+    { [ -n "$T1" ] && [ -f "$T1" ]; }  || MISSING_RAW="${MISSING_RAW}anat/${BIDS}_T1w.nii[.gz] "
+    [ -n "$DWI_B1000" ]                || MISSING_RAW="${MISSING_RAW}DWI acq-b1000 "
+    [ -n "$DWI_B2000" ]                || MISSING_RAW="${MISSING_RAW}DWI acq-b2000 "
+    [ -n "$DWI_AP" ]                   || MISSING_RAW="${MISSING_RAW}fmap dir-AP "
+    [ -n "$DWI_PA" ]                   || MISSING_RAW="${MISSING_RAW}fmap dir-PA "
+
+    if [ -n "$MISSING_RAW" ]; then
+        warn "$SUBJECT_ID : données brutes manquantes (${MISSING_RAW}) — sujet ignoré"
+        continue
+    fi
 
     READOUT_TIME=$(get_readout_time "$DWI_AP_JSON")
     info "TotalReadoutTime : ${READOUT_TIME}s"
