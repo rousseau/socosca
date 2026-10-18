@@ -12,9 +12,9 @@
 #   Voir --no-pull / --no-push / --work-dir / --clean-sourcedata ci-dessous.
 #
 # IMPORTANT — dépendance mrtrix NON récupérable depuis Garage :
-#   02_mrtrix_pipeline.sh exclut délibérément les *.mif du push vers Garage
-#   (--exclude "*.mif", pour limiter le volume centralisé). Or ce script a
-#   besoin du FOD WM normalisé (.mif) pour l'extraction des pics (sh2peaks).
+#   02_mrtrix_pipeline.sh pousse désormais le FOD WM normalisé (.mif) vers
+#   Garage (seul tmp/ est exclu), mais ce script ne le rapatrie pas : il a
+#   besoin du FOD pour l'extraction des pics (sh2peaks).
 #   -> Ce script doit donc tourner sur la MÊME machine et le MÊME WORK_DIR
 #      que 02_mrtrix_pipeline.sh (juste après, avant tout --clean-sourcedata/
 #      nettoyage manuel), et lit directement <WORK_DIR>/derivatives/mrtrix/

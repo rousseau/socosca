@@ -11,5 +11,8 @@
 # masque déjà l'hôte/les identifiants réels.
 # =============================================================================
 export GARAGE_REMOTE="${GARAGE_REMOTE:-garage}"
-export GARAGE_BUCKET="${GARAGE_BUCKET:-study-x}"
-export GARAGE_PREFIX="${GARAGE_PREFIX:-Socosca}"
+export GARAGE_BUCKET="${GARAGE_BUCKET:-socosca}"
+# Préfixe optionnel dans le bucket (vide : le bucket socosca est la racine du jeu de
+# données, avec sourcedata/ (BIDS) et derivatives/ directement dessous).
+export GARAGE_PREFIX="${GARAGE_PREFIX-}"
+export GARAGE_ROOT="${GARAGE_REMOTE}:${GARAGE_BUCKET}${GARAGE_PREFIX:+/${GARAGE_PREFIX}}"

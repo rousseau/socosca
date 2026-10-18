@@ -20,8 +20,9 @@
 #
 #   --remove-after-push (push-results uniquement) : supprime les fichiers locaux
 #   une fois transférés avec succès (rclone move), pour ne pas garder les
-#   résultats volumineux sur la machine de traitement. Les *.mif ne sont jamais
-#   transférés donc jamais supprimés (voir --exclude ci-dessous).
+#   résultats volumineux sur la machine de traitement. Les dossiers tmp/
+#   (intermédiaires régénérables par le pipeline) ne sont jamais transférés,
+#   donc jamais supprimés (voir --exclude ci-dessous).
 # =============================================================================
 
 set -euo pipefail
@@ -48,7 +49,7 @@ usage() {
 Usage: $(basename "$0") <commande> [pipeline] [--dry-run] [--remove-after-push]
 
 Commandes :
-  push-data              ~/Data/Socosca/         -> garage:${GARAGE_BUCKET}/${GARAGE_PREFIX}/sourcedata/
+  push-data              ~/Data/Socosca/         -> ${GARAGE_ROOT}/sourcedata/
   pull-data              garage:.../sourcedata/  -> ~/Data/Socosca/
   push-results [pipeline]  derivatives/[pipeline]/ -> garage:.../derivatives/[pipeline]/
   pull-results [pipeline]  garage:.../derivatives/[pipeline]/ -> derivatives/[pipeline]/
@@ -82,10 +83,13 @@ done
 
 DATA_DIR="${HOME}/Data/Socosca"
 RESULTS_DIR="${PROJ_DIR}/derivatives"
-REMOTE_SOURCEDATA="${GARAGE_REMOTE}:${GARAGE_BUCKET}/${GARAGE_PREFIX}/sourcedata"
-REMOTE_DERIVATIVES="${GARAGE_REMOTE}:${GARAGE_BUCKET}/${GARAGE_PREFIX}/derivatives"
+REMOTE_SOURCEDATA="${GARAGE_ROOT}/sourcedata"
+REMOTE_DERIVATIVES="${GARAGE_ROOT}/derivatives"
 
-RCLONE_OPTS=(--exclude ".DS_Store" --exclude "__pycache__/**" --exclude "*.pyc" --progress)
+# --copy-links : les liens internes des dossiers FreeSurfer (lh.pial -> lh.pial.T1...)
+# sont envoyés comme fichiers ; fsaverage pointe vers l'installation FreeSurfer locale.
+RCLONE_OPTS=(--exclude ".DS_Store" --exclude "__pycache__/**" --exclude "*.pyc"
+             --copy-links --exclude "fsaverage" --exclude "fsaverage/**" --progress)
 [ "$DRY_RUN" = true ] && RCLONE_OPTS+=(--dry-run)
 
 do_copy() {
@@ -117,16 +121,16 @@ case "$CMD" in
         results_remote_dir="${REMOTE_DERIVATIVES}${PIPELINE:+/${PIPELINE}}"
         [ -d "$results_local_dir" ] || die "Répertoire introuvable : ${results_local_dir}"
         if [ "$REMOVE_AFTER_PUSH" = true ]; then
-            do_move "Push derivatives${PIPELINE:+ (${PIPELINE})} -> Garage" "$results_local_dir" "$results_remote_dir" --exclude "*.mif"
+            do_move "Push derivatives${PIPELINE:+ (${PIPELINE})} -> Garage" "$results_local_dir" "$results_remote_dir" --exclude "tmp/**"
         else
-            do_copy "Push derivatives${PIPELINE:+ (${PIPELINE})} -> Garage" "$results_local_dir" "$results_remote_dir" --exclude "*.mif"
+            do_copy "Push derivatives${PIPELINE:+ (${PIPELINE})} -> Garage" "$results_local_dir" "$results_remote_dir" --exclude "tmp/**"
         fi
         ;;
     pull-results)
         results_local_dir="${RESULTS_DIR}${PIPELINE:+/${PIPELINE}}"
         results_remote_dir="${REMOTE_DERIVATIVES}${PIPELINE:+/${PIPELINE}}"
         mkdir -p "$results_local_dir"
-        do_copy "Pull derivatives${PIPELINE:+ (${PIPELINE})} <- Garage" "$results_remote_dir" "$results_local_dir" --exclude "*.mif"
+        do_copy "Pull derivatives${PIPELINE:+ (${PIPELINE})} <- Garage" "$results_remote_dir" "$results_local_dir" --exclude "tmp/**"
         ;;
     *)
         die "Commande inconnue : ${CMD} (voir --help)"

@@ -679,7 +679,7 @@ for SUBJECT_ID in "${SUBJECTS[@]}"; do
 
     if [ "$DO_PUSH" = true ]; then
         log "Push derivatives -> Garage (${SUBJECT_ID})"
-        push_subject_results "$PIPELINE" "$SUBJECT_ID" "${RESULTS_ROOT}/${SUBJECT_ID}" "*.mif" "tmp/**"
+        push_subject_results "$PIPELINE" "$SUBJECT_ID" "${RESULTS_ROOT}/${SUBJECT_ID}" "tmp/**"
         push_subject_results "plots" "$SUBJECT_ID" "$OUT_PLOTS"
         info "Poussé vers Garage : derivatives/${PIPELINE}/${SUBJECT_ID} et derivatives/plots/${SUBJECT_ID}"
     fi

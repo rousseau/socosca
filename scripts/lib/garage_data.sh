@@ -7,8 +7,7 @@
 # script accède aux données de la même façon.
 #
 # Prérequis avant de sourcer ce fichier :
-#   - config/machine.sh déjà sourcé (fournit GARAGE_REMOTE/GARAGE_BUCKET/
-#     GARAGE_PREFIX via config/garage.sh)
+#   - config/machine.sh déjà sourcé (fournit GARAGE_ROOT via config/garage.sh)
 #   - Variables définies par le script appelant : WORK_DIR, DATA_DIR
 #     (="${WORK_DIR}/sourcedata"), SUBJECT_ARG, DO_PULL, DO_PUSH
 #     (CLEAN_SOURCEDATA pour clean_sourcedata)
@@ -42,13 +41,13 @@ select_subjects() {
     SUBJECTS=()
     if [ "${DO_PULL}" = true ]; then
         while IFS= read -r _s; do SUBJECTS+=("${_s%/}"); done < <(
-            rclone lsf "${GARAGE_REMOTE}:${GARAGE_BUCKET}/${GARAGE_PREFIX}/sourcedata" --dirs-only 2>/dev/null | grep '^sub-' | sort)
+            rclone lsf "${GARAGE_ROOT}/sourcedata" --dirs-only 2>/dev/null | grep '^sub-' | sort)
         # "if" (pas "test && { ...; }") : sous set -e, le statut de sortie du
         # test false serait celui de la dernière commande de la fonction, donc
         # celui de select_subjects — et tuerait le script juste après l'appel,
         # y compris quand des sujets ONT été trouvés (cas normal).
         if [ ${#SUBJECTS[@]} -eq 0 ]; then
-            echo "[ERR] Aucun sujet trouvé sur Garage (${GARAGE_BUCKET}/${GARAGE_PREFIX}/sourcedata) — vérifier rclone/le remote, ou utiliser --sub" >&2
+            echo "[ERR] Aucun sujet trouvé sur Garage (${GARAGE_ROOT}/sourcedata) — vérifier rclone/le remote, ou utiliser --sub" >&2
             exit 1
         fi
     else
@@ -68,14 +67,14 @@ select_subjects() {
 pull_subject_sourcedata() {
     local subject_id="$1" subdir="${2:-}"
     [ "${DO_PULL}" = true ] || return 0
-    local remote="${GARAGE_REMOTE}:${GARAGE_BUCKET}/${GARAGE_PREFIX}/sourcedata/${subject_id}${subdir:+/${subdir}}"
+    local remote="${GARAGE_ROOT}/sourcedata/${subject_id}${subdir:+/${subdir}}"
     local local_dir="${DATA_DIR}/${subject_id}${subdir:+/${subdir}}"
     mkdir -p "$local_dir"
     rclone copy "$remote" "$local_dir" --exclude ".DS_Store" --quiet
 }
 
 # Pousse les dérivés locaux d'un sujet vers Garage.
-#   push_subject_results mrtrix sub-01 "${RESULTS_ROOT}/sub-01" "*.mif" "tmp/**"
+#   push_subject_results mrtrix sub-01 "${RESULTS_ROOT}/sub-01" "tmp/**"
 # No-op si DO_PUSH=false.
 push_subject_results() {
     local pipeline="$1" subject_id="$2" local_dir="$3"; shift 3
@@ -85,7 +84,7 @@ push_subject_results() {
     local e
     for e in "$@"; do rclone_excludes+=(--exclude "$e"); done
     rclone copy "$local_dir" \
-        "${GARAGE_REMOTE}:${GARAGE_BUCKET}/${GARAGE_PREFIX}/derivatives/${pipeline}/${subject_id}" \
+        "${GARAGE_ROOT}/derivatives/${pipeline}/${subject_id}" \
         "${rclone_excludes[@]}" --quiet
 }
 
